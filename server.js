@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const { state, pickRandomReply, recordActivity } = require('./store');
-const { startBot } = require('./bot');
+// телеграм-бот временно убран из флоу — настройки задаются через .env напрямую
 
 const app = express();
 app.use(express.json());
@@ -66,7 +66,7 @@ async function handleNewComment(commentData) {
   console.log(`new comment ${commentId} from ${fromUserId}: "${text}"`);
 
   await replyToComment(commentId, pickRandomReply());
-  await sendDirectMessage(fromUserId, state.dmText);
+  await sendDirectMessage(commentId, state.dmText);
   recordActivity();
 }
 
@@ -83,17 +83,17 @@ async function replyToComment(commentId, message) {
   }
 }
 
-async function sendDirectMessage(recipientId, message) {
+async function sendDirectMessage(commentId, message) {
   try {
     await axios.post(
       `https://graph.instagram.com/v21.0/${state.ig.igBusinessId}/messages`,
       {
-        recipient: { id: recipientId },
+        recipient: { comment_id: commentId },
         message: { text: message },
       },
       { params: { access_token: state.ig.pageAccessToken } }
     );
-    console.log(`sent DM to ${recipientId}`);
+    console.log(`sent DM for comment ${commentId}`);
   } catch (err) {
     console.error('dm error:', err.response?.data || err.message);
   }
@@ -103,5 +103,4 @@ app.get('/', (req, res) => res.send('ig-autoresponder is running'));
 
 app.listen(PORT, () => {
   console.log(`server listening on port ${PORT}`);
-  startBot(); // запускаем телеграм-бота вместе с сервером
 });
