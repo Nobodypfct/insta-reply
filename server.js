@@ -63,6 +63,12 @@ async function handleNewComment(commentData) {
 
   if (!commentId || !fromUserId) return;
 
+  // защита от петли: игнорируем комментарии от самого себя (наши же ответы)
+  if (fromUserId === state.ig.igBusinessId) {
+    console.log(`skipping own comment ${commentId} (avoiding reply loop)`);
+    return;
+  }
+
   console.log(`new comment ${commentId} from ${fromUserId}: "${text}"`);
 
   await replyToComment(commentId, pickRandomReply());
