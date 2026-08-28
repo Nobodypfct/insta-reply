@@ -73,7 +73,7 @@ async function handleNewComment(commentData) {
 async function replyToComment(commentId, message) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v21.0/${commentId}/replies`,
+      `https://graph.instagram.com/v21.0/${commentId}/replies`,
       { message },
       { params: { access_token: state.ig.pageAccessToken } }
     );
@@ -86,7 +86,7 @@ async function replyToComment(commentId, message) {
 async function sendDirectMessage(recipientId, message) {
   try {
     await axios.post(
-      `https://graph.facebook.com/v21.0/${state.ig.igBusinessId}/messages`,
+      `https://graph.instagram.com/v21.0/${state.ig.igBusinessId}/messages`,
       {
         recipient: { id: recipientId },
         message: { text: message },
