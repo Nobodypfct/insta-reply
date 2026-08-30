@@ -1,7 +1,7 @@
 {
   "name": "ig-autoresponder",
-  "version": "0.1.0",
-  "description": "Instagram comment -> reply + DM automation MVP",
+  "version": "0.2.0",
+  "description": "Instagram comment -> reply + DM automation, multi-tenant via Supabase",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -9,9 +9,9 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "telegraf": "^4.16.3"
+    "express": "^4.19.2"
   }
 }

@@ -1,0 +1,28 @@
+# зависимости
+node_modules/
+
+# переменные окружения (секреты!)
+.env
+.env.local
+.env.*.local
+
+# логи
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# редакторы
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# сборки (если появятся)
+dist/
+build/
+
+# временные файлы
+*.tmp
+.cache/
