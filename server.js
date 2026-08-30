@@ -201,19 +201,19 @@ app.get("/auth/instagram/callback", async (req, res) => {
   const code = rawCode.replace(/#_$/, "");
 
   try {
-    // шаг 1: обмениваем code на короткоживущий токен
+    // шаг 1: обмениваем code на короткоживущий токен (multipart/form-data, как в докax Meta)
+    const FormData = require("form-data");
+    const form = new FormData();
+    form.append("client_id", IG_APP_ID);
+    form.append("client_secret", IG_APP_SECRET);
+    form.append("grant_type", "authorization_code");
+    form.append("redirect_uri", IG_REDIRECT_URI);
+    form.append("code", code);
+
     const shortTokenRes = await axios.post(
       "https://api.instagram.com/oauth/access_token",
-      null,
-      {
-        params: {
-          client_id: IG_APP_ID,
-          client_secret: IG_APP_SECRET,
-          grant_type: "authorization_code",
-          redirect_uri: IG_REDIRECT_URI,
-          code,
-        },
-      },
+      form,
+      { headers: form.getHeaders() },
     );
     const shortLivedToken = shortTokenRes.data.access_token;
 
