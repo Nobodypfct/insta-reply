@@ -208,7 +208,7 @@ app.get("/auth/instagram/callback", async (req, res) => {
     form.append("client_id", IG_APP_ID);
     form.append("client_secret", IG_APP_SECRET);
     form.append("grant_type", "authorization_code");
-    form.append("redirect_uri", IG_REDIRECT_URI);
+    form.append("redirect_uri", ""); // воркэраунд известного бага Meta с false redirect_uri mismatch
     form.append("code", code);
 
     const shortTokenRes = await axios.post(
