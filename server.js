@@ -156,9 +156,9 @@ app.get("/api/ig-accounts", async (req, res) => {
 
 // ==================== OAuth: подключение Instagram клиентом ====================
 
-const IG_APP_ID = process.env.IG_APP_ID?.trim();
-const IG_APP_SECRET = process.env.IG_APP_SECRET?.trim();
-const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI?.trim();
+const IG_APP_ID = process.env.IG_APP_ID;
+const IG_APP_SECRET = process.env.IG_APP_SECRET;
+const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI;
 
 // 1. кнопка "Подключить Instagram" на фронтенде ведёт сюда
 // ?user_id=<uuid залогиненного юзера из Supabase Auth>
