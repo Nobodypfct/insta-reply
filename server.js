@@ -156,9 +156,9 @@ app.get("/api/ig-accounts", async (req, res) => {
 
 // ==================== OAuth: подключение Instagram клиентом ====================
 
-const IG_APP_ID = process.env.IG_APP_ID;
-const IG_APP_SECRET = process.env.IG_APP_SECRET;
-const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI;
+const IG_APP_ID = process.env.IG_APP_ID?.trim();
+const IG_APP_SECRET = process.env.IG_APP_SECRET?.trim();
+const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI?.trim();
 
 // 1. кнопка "Подключить Instagram" на фронтенде ведёт сюда
 // ?user_id=<uuid залогиненного юзера из Supabase Auth>
@@ -201,15 +201,20 @@ app.get("/auth/instagram/callback", async (req, res) => {
 
   try {
     // шаг 1: обмениваем code на короткоживущий токен
+    // ВАЖНО: этот эндпоинт ожидает multipart/form-data (в докax Meta используется curl -F),
+    // а не application/x-www-form-urlencoded
+    const FormData = require("form-data");
+    const form = new FormData();
+    form.append("client_id", IG_APP_ID);
+    form.append("client_secret", IG_APP_SECRET);
+    form.append("grant_type", "authorization_code");
+    form.append("redirect_uri", IG_REDIRECT_URI);
+    form.append("code", code);
+
     const shortTokenRes = await axios.post(
       "https://api.instagram.com/oauth/access_token",
-      new URLSearchParams({
-        client_id: IG_APP_ID,
-        client_secret: IG_APP_SECRET,
-        grant_type: "authorization_code",
-        redirect_uri: IG_REDIRECT_URI,
-        code,
-      }),
+      form,
+      { headers: form.getHeaders() },
     );
     const shortLivedToken = shortTokenRes.data.access_token;
 
