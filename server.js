@@ -200,6 +200,15 @@ app.get("/auth/instagram/callback", async (req, res) => {
   // нужно обрезать перед обменом (официально задокументированный нюанс Meta)
   const code = rawCode.replace(/#_$/, "");
 
+  // временное debug-логирование, чтобы увидеть РЕАЛЬНЫЕ значения без гадания
+  console.log("DEBUG oauth exchange:", {
+    codeLength: code.length,
+    codePreview: `${code.slice(0, 15)}...${code.slice(-10)}`,
+    redirectUri: IG_REDIRECT_URI,
+    redirectUriLength: IG_REDIRECT_URI.length,
+    appId: IG_APP_ID,
+  });
+
   try {
     // шаг 1: обмениваем code на короткоживущий токен (multipart/form-data, как в докax Meta)
     const FormData = require("form-data");
