@@ -171,7 +171,7 @@ app.get("/auth/instagram/connect", (req, res) => {
     redirect_uri: IG_REDIRECT_URI,
     response_type: "code",
     scope:
-      "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
+      "instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments,instagram_business_content_publish,instagram_business_manage_insights",
     state: user_id,
     force_reauth: "true", // как в официальном Embed URL от meta - исключаем кэшированную авторизацию
   });
