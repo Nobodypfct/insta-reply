@@ -5,6 +5,78 @@ const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 // service_role key используется только на сервере, никогда не попадает в браузер
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// создать или обновить ig_account (используется при OAuth-подключении)
+async function upsertIgAccount({
+  userId,
+  igBusinessId,
+  username,
+  pageAccessToken,
+  tokenExpiresAt,
+}) {
+  const { data, error } = await supabase
+    .from("ig_accounts")
+    .upsert(
+      {
+        user_id: userId,
+        ig_business_id: igBusinessId,
+        username,
+        page_access_token: pageAccessToken,
+        token_expires_at: tokenExpiresAt,
+      },
+      { onConflict: "ig_business_id" },
+    )
+    .select()
+    .single();
+
+  if (error) {
+    console.error("upsertIgAccount error:", error.message);
+    return null;
+  }
+
+  // при первом подключении сразу создаём дефолтные шаблоны и dm_settings,
+  // если их ещё нет для этого аккаунта
+  const { data: existingTemplates } = await supabase
+    .from("reply_templates")
+    .select("id")
+    .eq("ig_account_id", data.id)
+    .limit(1);
+
+  if (!existingTemplates || existingTemplates.length === 0) {
+    await supabase.from("reply_templates").insert([
+      {
+        ig_account_id: data.id,
+        text: "Спасибо! Ссылку отправил тебе в директ 🚀",
+      },
+      { ig_account_id: data.id, text: "Отправил детали в личку, проверь 📩" },
+    ]);
+  }
+
+  await supabase.from("dm_settings").upsert(
+    {
+      ig_account_id: data.id,
+      dm_text:
+        "Привет! Спасибо за комментарий 🙌 Вот то, что ты искал(а): [ССЫЛКА]",
+    },
+    { onConflict: "ig_account_id" },
+  );
+
+  return data;
+}
+
+// получить все подключённые аккаунты конкретного юзера (для дашборда)
+async function getIgAccountsByUser(userId) {
+  const { data, error } = await supabase
+    .from("ig_accounts")
+    .select("id, ig_business_id, username, webhook_enabled, created_at")
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("getIgAccountsByUser error:", error.message);
+    return [];
+  }
+  return data;
+}
+
 // --- ig_accounts ---
 
 // найти подключённый аккаунт по его instagram business id
@@ -119,6 +191,8 @@ async function logActivity({
 module.exports = {
   getIgAccountByBusinessId,
   createIgAccount,
+  upsertIgAccount,
+  getIgAccountsByUser,
   getReplyTemplates,
   pickRandomReply,
   getDmText,

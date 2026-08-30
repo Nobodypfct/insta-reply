@@ -1,9 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const cors = require("cors");
 const db = require("./db");
 
 const app = express();
+app.use(cors({ origin: process.env.FRONTEND_URL }));
 app.use(express.json());
 
 const { VERIFY_TOKEN, PORT = 3000 } = process.env;
@@ -142,5 +144,120 @@ async function sendDirectMessage(
 }
 
 app.get("/", (req, res) => res.send("ig-autoresponder is running"));
+
+// простой API для фронтенда - список подключённых аккаунтов юзера
+app.get("/api/ig-accounts", async (req, res) => {
+  const { user_id } = req.query;
+  if (!user_id) return res.status(400).json({ error: "missing user_id" });
+
+  const accounts = await db.getIgAccountsByUser(user_id);
+  res.json({ accounts });
+});
+
+// ==================== OAuth: подключение Instagram клиентом ====================
+
+const { IG_APP_ID, IG_APP_SECRET, IG_REDIRECT_URI } = process.env;
+
+// 1. кнопка "Подключить Instagram" на фронтенде ведёт сюда
+// ?user_id=<uuid залогиненного юзера из Supabase Auth>
+app.get("/auth/instagram/connect", (req, res) => {
+  const { user_id } = req.query;
+  if (!user_id) return res.status(400).send("missing user_id");
+
+  const params = new URLSearchParams({
+    client_id: IG_APP_ID,
+    redirect_uri: IG_REDIRECT_URI,
+    response_type: "code",
+    scope:
+      "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
+    state: user_id, // передаём id юзера через state, чтобы знать, кому привязать аккаунт после
+  });
+
+  res.redirect(
+    `https://www.instagram.com/oauth/authorize?${params.toString()}`,
+  );
+});
+
+// 2. Instagram редиректит сюда после того как юзер разрешил доступ
+app.get("/auth/instagram/callback", async (req, res) => {
+  const { code, state: userId, error } = req.query;
+
+  if (error) {
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard?connect_error=${error}`,
+    );
+  }
+  if (!code || !userId) {
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard?connect_error=missing_params`,
+    );
+  }
+
+  try {
+    // шаг 1: обмениваем code на короткоживущий токен
+    const shortTokenRes = await axios.post(
+      "https://api.instagram.com/oauth/access_token",
+      new URLSearchParams({
+        client_id: IG_APP_ID,
+        client_secret: IG_APP_SECRET,
+        grant_type: "authorization_code",
+        redirect_uri: IG_REDIRECT_URI,
+        code,
+      }),
+    );
+    const shortLivedToken = shortTokenRes.data.access_token;
+
+    // шаг 2: обмениваем короткоживущий на долгоживущий (60 дней)
+    const longTokenRes = await axios.get(
+      "https://graph.instagram.com/access_token",
+      {
+        params: {
+          grant_type: "ig_exchange_token",
+          client_secret: IG_APP_SECRET,
+          access_token: shortLivedToken,
+        },
+      },
+    );
+    const longLivedToken = longTokenRes.data.access_token;
+    const expiresInSeconds = longTokenRes.data.expires_in;
+
+    // шаг 3: узнаём id и username подключённого аккаунта
+    const meRes = await axios.get("https://graph.instagram.com/v21.0/me", {
+      params: { fields: "id,username", access_token: longLivedToken },
+    });
+    const { id: igBusinessId, username } = meRes.data;
+
+    // шаг 4: сохраняем в БД, привязываем к юзеру, который инициировал подключение
+    const expiresAt = new Date(
+      Date.now() + expiresInSeconds * 1000,
+    ).toISOString();
+    await db.upsertIgAccount({
+      userId,
+      igBusinessId,
+      username,
+      pageAccessToken: longLivedToken,
+      tokenExpiresAt: expiresAt,
+    });
+
+    // шаг 5: подписываем аккаунт на вебхуки
+    await axios.post(
+      `https://graph.instagram.com/v21.0/${igBusinessId}/subscribed_apps`,
+      null,
+      {
+        params: {
+          subscribed_fields: "comments,messages",
+          access_token: longLivedToken,
+        },
+      },
+    );
+
+    res.redirect(`${process.env.FRONTEND_URL}/dashboard?connected=${username}`);
+  } catch (err) {
+    console.error("instagram oauth error:", err.response?.data || err.message);
+    res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard?connect_error=oauth_failed`,
+    );
+  }
+});
 
 app.listen(PORT, () => console.log(`server listening on port ${PORT}`));
