@@ -156,7 +156,9 @@ app.get("/api/ig-accounts", async (req, res) => {
 
 // ==================== OAuth: подключение Instagram клиентом ====================
 
-const { IG_APP_ID, IG_APP_SECRET, IG_REDIRECT_URI } = process.env;
+const IG_APP_ID = process.env.IG_APP_ID?.trim();
+const IG_APP_SECRET = process.env.IG_APP_SECRET?.trim();
+const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI?.trim();
 
 // 1. кнопка "Подключить Instagram" на фронтенде ведёт сюда
 // ?user_id=<uuid залогиненного юзера из Supabase Auth>
@@ -180,18 +182,22 @@ app.get("/auth/instagram/connect", (req, res) => {
 
 // 2. Instagram редиректит сюда после того как юзер разрешил доступ
 app.get("/auth/instagram/callback", async (req, res) => {
-  const { code, state: userId, error } = req.query;
+  const { code: rawCode, state: userId, error } = req.query;
 
   if (error) {
     return res.redirect(
       `${process.env.FRONTEND_URL}/dashboard?connect_error=${error}`,
     );
   }
-  if (!code || !userId) {
+  if (!rawCode || !userId) {
     return res.redirect(
       `${process.env.FRONTEND_URL}/dashboard?connect_error=missing_params`,
     );
   }
+
+  // Instagram добавляет "#_" в конец кода при редиректе - это не часть самого кода,
+  // нужно обрезать перед обменом (официально задокументированный нюанс Meta)
+  const code = rawCode.replace(/#_$/, "");
 
   try {
     // шаг 1: обмениваем code на короткоживущий токен
