@@ -172,7 +172,8 @@ app.get("/auth/instagram/connect", (req, res) => {
     response_type: "code",
     scope:
       "instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_messages",
-    state: user_id, // передаём id юзера через state, чтобы знать, кому привязать аккаунт после
+    state: user_id,
+    force_reauth: "true", // как в официальном Embed URL от meta - исключаем кэшированную авторизацию
   });
 
   res.redirect(
@@ -201,20 +202,18 @@ app.get("/auth/instagram/callback", async (req, res) => {
 
   try {
     // шаг 1: обмениваем code на короткоживущий токен
-    // ВАЖНО: этот эндпоинт ожидает multipart/form-data (в докax Meta используется curl -F),
-    // а не application/x-www-form-urlencoded
-    const FormData = require("form-data");
-    const form = new FormData();
-    form.append("client_id", IG_APP_ID);
-    form.append("client_secret", IG_APP_SECRET);
-    form.append("grant_type", "authorization_code");
-    form.append("redirect_uri", IG_REDIRECT_URI);
-    form.append("code", code);
-
     const shortTokenRes = await axios.post(
       "https://api.instagram.com/oauth/access_token",
-      form,
-      { headers: form.getHeaders() },
+      null,
+      {
+        params: {
+          client_id: IG_APP_ID,
+          client_secret: IG_APP_SECRET,
+          grant_type: "authorization_code",
+          redirect_uri: IG_REDIRECT_URI,
+          code,
+        },
+      },
     );
     const shortLivedToken = shortTokenRes.data.access_token;
 
