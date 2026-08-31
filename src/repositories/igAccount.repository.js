@@ -9,6 +9,18 @@ function maskEmail(email) {
   return `${visible}${'*'.repeat(Math.max(name.length - 2, 3))}@${domain}`;
 }
 
+// найти аккаунт по его внутреннему id (не instagram business id) -
+// используется, когда нужен токен/данные конкретной строки в ig_accounts
+async function findById(id) {
+  const { data, error } = await supabase.from('ig_accounts').select('*').eq('id', id).single();
+
+  if (error) {
+    console.error('igAccount.findById error:', error.message);
+    return null;
+  }
+  return data;
+}
+
 // найти подключённый аккаунт по его instagram business id
 // (используется, когда приходит вебхук - нужно понять, чей это аккаунт)
 async function findByBusinessId(igBusinessId) {
@@ -90,4 +102,4 @@ async function upsert({ userId, igBusinessId, username, pageAccessToken, tokenEx
   return { ...data, _isTransfer: isTransfer };
 }
 
-module.exports = { findByBusinessId, findByUserId, checkOwner, upsert };
+module.exports = { findById, findByBusinessId, findByUserId, checkOwner, upsert };

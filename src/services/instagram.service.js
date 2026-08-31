@@ -57,4 +57,16 @@ async function getMe(accessToken) {
   return { igBusinessId: userIdField || id, username };
 }
 
-module.exports = { replyToComment, sendDirectMessage, subscribeToWebhooks, getMe };
+// последние посты аккаунта - для выбора конкретного поста при создании шаблона
+async function getRecentMedia(accessToken, igBusinessId, limit = 25) {
+  const res = await axios.get(`${BASE_URL}/${igBusinessId}/media`, {
+    params: {
+      fields: 'id,caption,media_type,thumbnail_url,media_url,permalink,timestamp',
+      limit,
+      access_token: accessToken,
+    },
+  });
+  return res.data.data || [];
+}
+
+module.exports = { replyToComment, sendDirectMessage, subscribeToWebhooks, getMe, getRecentMedia };
