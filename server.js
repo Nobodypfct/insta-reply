@@ -150,26 +150,19 @@ app.get("/", (req, res) => res.send("ig-autoresponder is running"));
 // и доделывает то, что у нас и так стабильно работает: обмен на долгоживущий
 // токен, сохранение в БД, подписка на вебхуки
 app.post("/api/complete-instagram-connect", async (req, res) => {
-  const { user_id: userId, long_lived_token } = req.body;
+  const { user_id: userId, long_lived_token, force_transfer } = req.body;
 
   if (!userId || !long_lived_token) {
     return res.status(400).json({ error: "missing required fields" });
   }
 
   try {
-    // токен уже долгоживущий (обмен сделан на фронтенде в Auth.js) -
-    // просто проверяем id/username и сохраняем.
-    // ВАЖНО: запрашиваем и user_id тоже - именно это поле совпадает с форматом,
-    // который Meta присылает в entry.id вебхука (поле id даёт другой формат id
-    // при self-serve OAuth через www.instagram.com/oauth/authorize)
     const meRes = await axios.get("https://graph.instagram.com/v26.0/me", {
       params: { fields: "id,user_id,username", access_token: long_lived_token },
     });
     const { id, user_id: userIdField, username: realUsername } = meRes.data;
     const igBusinessId = userIdField || id;
 
-    // 60 дней от текущего момента - консервативная оценка, раз точный expires_in
-    // от обмена уже мог быть частично использован на фронтенде
     const expiresAt = new Date(
       Date.now() + 60 * 24 * 60 * 60 * 1000,
     ).toISOString();
@@ -179,6 +172,7 @@ app.post("/api/complete-instagram-connect", async (req, res) => {
       username: realUsername,
       pageAccessToken: long_lived_token,
       tokenExpiresAt: expiresAt,
+      forceTransfer: force_transfer === true,
     });
 
     if (!savedAccount) {
@@ -188,6 +182,15 @@ app.post("/api/complete-instagram-connect", async (req, res) => {
       return res
         .status(500)
         .json({ error: "failed to save account to database" });
+    }
+
+    // аккаунт уже подключён другим юзером - просим подтверждения переноса
+    if (savedAccount.conflict) {
+      return res.status(409).json({
+        conflict: true,
+        existingOwnerEmail: savedAccount.existingOwnerEmail,
+        username: realUsername,
+      });
     }
 
     await axios.post(
