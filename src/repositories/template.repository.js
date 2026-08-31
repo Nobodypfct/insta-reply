@@ -1,61 +1,153 @@
 const supabase = require('../lib/supabase');
 
-const DEFAULT_REPLY_TEMPLATES = [
+const DEFAULT_REPLY_TEXTS = [
   'Спасибо! Ссылку отправил тебе в директ 🚀',
   'Отправил детали в личку, проверь 📩',
   'Готово, лови в директе!',
 ];
-
 const DEFAULT_DM_TEXT = 'Привет! Спасибо за комментарий 🙌 Вот то, что ты искал(а): [ССЫЛКА]';
 
-async function getReplyTemplates(igAccountId) {
+// все шаблоны аккаунта вместе с их вариантами ответов - используется и для
+// подбора подходящего шаблона на вебхуке, и для отображения в кабинете
+async function findAllByAccount(igAccountId) {
   const { data, error } = await supabase
-    .from('reply_templates')
-    .select('text')
-    .eq('ig_account_id', igAccountId);
+    .from('templates')
+    .select('*, template_replies(id, text)')
+    .eq('ig_account_id', igAccountId)
+    .eq('is_active', true);
 
-  if (error || !data || data.length === 0) {
-    return DEFAULT_REPLY_TEMPLATES;
+  if (error) {
+    console.error('template.findAllByAccount error:', error.message);
+    return [];
   }
-  return data.map((row) => row.text);
+  return data;
 }
 
-async function getDmText(igAccountId) {
-  const { data, error } = await supabase
-    .from('dm_settings')
-    .select('dm_text')
-    .eq('ig_account_id', igAccountId)
+// находит подходящий шаблон для конкретного комментария.
+// приоритет: 1) пост-специфичный с совпавшим keyword, 2) пост-специфичный
+// catch-all (без keyword), 3) "все посты" с совпавшим keyword,
+// 4) "все посты" catch-all. Внутри каждой группы шаблоны С keyword всегда
+// проверяются раньше catch-all, чтобы более конкретное правило не терялось
+// за общим просто из-за порядка в массиве
+function matchTemplate(templates, { postId, commentText }) {
+  const text = (commentText || '').toLowerCase();
+  const matchesKeyword = (tpl) => tpl.keyword && text.includes(tpl.keyword.toLowerCase());
+  const isCatchAll = (tpl) => !tpl.keyword;
+
+  const findBest = (scoped) =>
+    scoped.find(matchesKeyword) || scoped.find(isCatchAll) || null;
+
+  const postSpecific = templates.filter((t) => t.post_id === postId);
+  const postMatch = findBest(postSpecific);
+  if (postMatch) return postMatch;
+
+  const allPosts = templates.filter((t) => !t.post_id);
+  return findBest(allPosts);
+}
+
+function pickRandomReply(template) {
+  const variants = template.template_replies?.map((r) => r.text) || [];
+  if (variants.length === 0) return DEFAULT_REPLY_TEXTS[0];
+  return variants[Math.floor(Math.random() * variants.length)];
+}
+
+// создать новый шаблон с вариантами ответов
+async function create({ igAccountId, postId, keyword, dmText, replyTexts }) {
+  const { data: template, error } = await supabase
+    .from('templates')
+    .insert({
+      ig_account_id: igAccountId,
+      post_id: postId || null,
+      keyword: keyword || null,
+      dm_text: dmText || DEFAULT_DM_TEXT,
+    })
+    .select()
     .single();
 
-  if (error || !data) return DEFAULT_DM_TEXT;
-  return data.dm_text;
-}
-
-// вызывается один раз при первом подключении аккаунта - создаёт дефолтные
-// шаблоны и dm-текст, если их ещё нет
-async function ensureDefaults(igAccountId) {
-  const { data: existingTemplates } = await supabase
-    .from('reply_templates')
-    .select('id')
-    .eq('ig_account_id', igAccountId)
-    .limit(1);
-
-  if (!existingTemplates || existingTemplates.length === 0) {
-    await supabase.from('reply_templates').insert(
-      DEFAULT_REPLY_TEMPLATES.map((text) => ({ ig_account_id: igAccountId, text }))
-    );
+  if (error) {
+    console.error('template.create error:', error.message);
+    return null;
   }
 
+  const texts = replyTexts?.length ? replyTexts : DEFAULT_REPLY_TEXTS;
   await supabase
-    .from('dm_settings')
-    .upsert({ ig_account_id: igAccountId, dm_text: DEFAULT_DM_TEXT }, { onConflict: 'ig_account_id' });
+    .from('template_replies')
+    .insert(texts.map((text) => ({ template_id: template.id, text })));
+
+  return template;
 }
 
-// удаляет старые шаблоны/dm-настройки - используется при переносе аккаунта
-// другому владельцу, чтобы новый не унаследовал чужие настройки
+async function update(templateId, { postId, keyword, dmText, isActive }) {
+  const patch = {};
+  if (postId !== undefined) patch.post_id = postId || null;
+  if (keyword !== undefined) patch.keyword = keyword || null;
+  if (dmText !== undefined) patch.dm_text = dmText;
+  if (isActive !== undefined) patch.is_active = isActive;
+
+  const { data, error } = await supabase
+    .from('templates')
+    .update(patch)
+    .eq('id', templateId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('template.update error:', error.message);
+    return null;
+  }
+  return data;
+}
+
+async function replaceReplies(templateId, replyTexts) {
+  await supabase.from('template_replies').delete().eq('template_id', templateId);
+  if (replyTexts?.length) {
+    await supabase
+      .from('template_replies')
+      .insert(replyTexts.map((text) => ({ template_id: templateId, text })));
+  }
+}
+
+async function remove(templateId) {
+  const { error } = await supabase.from('templates').delete().eq('id', templateId);
+  if (error) console.error('template.remove error:', error.message);
+}
+
+// создаёт дефолтный шаблон "на все посты, без keyword" при первом подключении
+// аккаунта - сохраняет привычное поведение "отвечать на всё" из коробки
+async function ensureDefaults(igAccountId) {
+  const existing = await findAllByAccount(igAccountId);
+  if (existing.length > 0) return;
+
+  await create({
+    igAccountId,
+    postId: null,
+    keyword: null,
+    dmText: DEFAULT_DM_TEXT,
+    replyTexts: DEFAULT_REPLY_TEXTS,
+  });
+}
+
 async function clearForAccount(igAccountId) {
-  await supabase.from('reply_templates').delete().eq('ig_account_id', igAccountId);
-  await supabase.from('dm_settings').delete().eq('ig_account_id', igAccountId);
+  const { data: templates } = await supabase
+    .from('templates')
+    .select('id')
+    .eq('ig_account_id', igAccountId);
+
+  if (templates?.length) {
+    const ids = templates.map((t) => t.id);
+    await supabase.from('templates').delete().in('id', ids);
+    // template_replies удалятся каскадно через on delete cascade
+  }
 }
 
-module.exports = { getReplyTemplates, getDmText, ensureDefaults, clearForAccount };
+module.exports = {
+  findAllByAccount,
+  matchTemplate,
+  pickRandomReply,
+  create,
+  update,
+  replaceReplies,
+  remove,
+  ensureDefaults,
+  clearForAccount,
+};

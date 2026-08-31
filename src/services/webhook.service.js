@@ -3,13 +3,9 @@ const templateRepo = require('../repositories/template.repository');
 const activityLogRepo = require('../repositories/activityLog.repository');
 const instagramService = require('./instagram.service');
 
-function pickRandom(list) {
-  return list[Math.floor(Math.random() * list.length)];
-}
-
 // обрабатывает одно событие "новый комментарий" из вебхука:
-// находит владельца, фильтрует петли/выключенные аккаунты, отвечает,
-// шлёт DM, логирует активность
+// находит владельца, подбирает подходящий шаблон (по посту/keyword),
+// отвечает, шлёт DM, логирует активность
 async function handleNewComment(igBusinessId, commentData) {
   const commentId = commentData.id;
   const fromUserId = commentData.from?.id;
@@ -38,9 +34,16 @@ async function handleNewComment(igBusinessId, commentData) {
 
   console.log(`[${igAccount.username}] new comment ${commentId} from ${fromUserId}: "${text}"`);
 
-  const templates = await templateRepo.getReplyTemplates(igAccount.id);
-  const replyText = pickRandom(templates);
-  const dmText = await templateRepo.getDmText(igAccount.id);
+  const templates = await templateRepo.findAllByAccount(igAccount.id);
+  const matched = templateRepo.matchTemplate(templates, { postId, commentText: text });
+
+  if (!matched) {
+    console.log(`no matching template for comment ${commentId} (post ${postId}), skipping`);
+    return;
+  }
+
+  const replyText = templateRepo.pickRandomReply(matched);
+  const dmText = matched.dm_text;
 
   const replySuccess = await instagramService.replyToComment(
     igAccount.page_access_token,
