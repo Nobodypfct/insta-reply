@@ -108,7 +108,7 @@ async function handleNewComment(igBusinessId, commentData) {
 async function replyToComment(accessToken, commentId, message) {
   try {
     await axios.post(
-      `https://graph.instagram.com/v21.0/${commentId}/replies`,
+      `https://graph.instagram.com/v26.0/${commentId}/replies`,
       { message },
       { params: { access_token: accessToken } },
     );
@@ -128,7 +128,7 @@ async function sendDirectMessage(
 ) {
   try {
     await axios.post(
-      `https://graph.instagram.com/v21.0/${igBusinessId}/messages`,
+      `https://graph.instagram.com/v26.0/${igBusinessId}/messages`,
       {
         recipient: { comment_id: commentId },
         message: { text: message },
@@ -159,7 +159,7 @@ app.post("/api/complete-instagram-connect", async (req, res) => {
   try {
     // токен уже долгоживущий (обмен сделан на фронтенде в Auth.js) -
     // просто проверяем id/username и сохраняем
-    const meRes = await axios.get("https://graph.instagram.com/v21.0/me", {
+    const meRes = await axios.get("https://graph.instagram.com/v26.0/me", {
       params: { fields: "id,username", access_token: long_lived_token },
     });
     const { id: igBusinessId, username: realUsername } = meRes.data;
@@ -178,7 +178,7 @@ app.post("/api/complete-instagram-connect", async (req, res) => {
     });
 
     await axios.post(
-      `https://graph.instagram.com/v21.0/${igBusinessId}/subscribed_apps`,
+      `https://graph.instagram.com/v26.0/${igBusinessId}/subscribed_apps`,
       null,
       {
         params: {
@@ -293,7 +293,7 @@ app.get("/auth/instagram/callback", async (req, res) => {
     const expiresInSeconds = longTokenRes.data.expires_in;
 
     // шаг 3: узнаём id и username подключённого аккаунта
-    const meRes = await axios.get("https://graph.instagram.com/v21.0/me", {
+    const meRes = await axios.get("https://graph.instagram.com/v26.0/me", {
       params: { fields: "id,username", access_token: longLivedToken },
     });
     const { id: igBusinessId, username } = meRes.data;
@@ -312,7 +312,7 @@ app.get("/auth/instagram/callback", async (req, res) => {
 
     // шаг 5: подписываем аккаунт на вебхуки
     await axios.post(
-      `https://graph.instagram.com/v21.0/${igBusinessId}/subscribed_apps`,
+      `https://graph.instagram.com/v26.0/${igBusinessId}/subscribed_apps`,
       null,
       {
         params: {
