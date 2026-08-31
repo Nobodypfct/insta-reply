@@ -158,24 +158,37 @@ app.post("/api/complete-instagram-connect", async (req, res) => {
 
   try {
     // токен уже долгоживущий (обмен сделан на фронтенде в Auth.js) -
-    // просто проверяем id/username и сохраняем
+    // просто проверяем id/username и сохраняем.
+    // ВАЖНО: запрашиваем и user_id тоже - именно это поле совпадает с форматом,
+    // который Meta присылает в entry.id вебхука (поле id даёт другой формат id
+    // при self-serve OAuth через www.instagram.com/oauth/authorize)
     const meRes = await axios.get("https://graph.instagram.com/v26.0/me", {
-      params: { fields: "id,username", access_token: long_lived_token },
+      params: { fields: "id,user_id,username", access_token: long_lived_token },
     });
-    const { id: igBusinessId, username: realUsername } = meRes.data;
+    const { id, user_id: userIdField, username: realUsername } = meRes.data;
+    const igBusinessId = userIdField || id;
 
     // 60 дней от текущего момента - консервативная оценка, раз точный expires_in
     // от обмена уже мог быть частично использован на фронтенде
     const expiresAt = new Date(
       Date.now() + 60 * 24 * 60 * 60 * 1000,
     ).toISOString();
-    await db.upsertIgAccount({
+    const savedAccount = await db.upsertIgAccount({
       userId,
       igBusinessId,
       username: realUsername,
       pageAccessToken: long_lived_token,
       tokenExpiresAt: expiresAt,
     });
+
+    if (!savedAccount) {
+      console.error(
+        "complete-instagram-connect: upsertIgAccount вернул null, запись не сохранена",
+      );
+      return res
+        .status(500)
+        .json({ error: "failed to save account to database" });
+    }
 
     await axios.post(
       `https://graph.instagram.com/v26.0/${igBusinessId}/subscribed_apps`,
@@ -294,9 +307,10 @@ app.get("/auth/instagram/callback", async (req, res) => {
 
     // шаг 3: узнаём id и username подключённого аккаунта
     const meRes = await axios.get("https://graph.instagram.com/v26.0/me", {
-      params: { fields: "id,username", access_token: longLivedToken },
+      params: { fields: "id,user_id,username", access_token: longLivedToken },
     });
-    const { id: igBusinessId, username } = meRes.data;
+    const { id, user_id: userIdField, username } = meRes.data;
+    const igBusinessId = userIdField || id;
 
     // шаг 4: сохраняем в БД, привязываем к юзеру, который инициировал подключение
     const expiresAt = new Date(
