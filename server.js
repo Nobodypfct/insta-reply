@@ -146,6 +146,58 @@ async function sendDirectMessage(
 app.get("/", (req, res) => res.send("ig-autoresponder is running"));
 
 // простой API для фронтенда - список подключённых аккаунтов юзера
+// принимает short-lived токен, полученный на фронтенде через Auth.js,
+// и доделывает то, что у нас и так стабильно работает: обмен на долгоживущий
+// токен, сохранение в БД, подписка на вебхуки
+app.post("/api/complete-instagram-connect", async (req, res) => {
+  const { user_id: userId, long_lived_token } = req.body;
+
+  if (!userId || !long_lived_token) {
+    return res.status(400).json({ error: "missing required fields" });
+  }
+
+  try {
+    // токен уже долгоживущий (обмен сделан на фронтенде в Auth.js) -
+    // просто проверяем id/username и сохраняем
+    const meRes = await axios.get("https://graph.instagram.com/v21.0/me", {
+      params: { fields: "id,username", access_token: long_lived_token },
+    });
+    const { id: igBusinessId, username: realUsername } = meRes.data;
+
+    // 60 дней от текущего момента - консервативная оценка, раз точный expires_in
+    // от обмена уже мог быть частично использован на фронтенде
+    const expiresAt = new Date(
+      Date.now() + 60 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    await db.upsertIgAccount({
+      userId,
+      igBusinessId,
+      username: realUsername,
+      pageAccessToken: long_lived_token,
+      tokenExpiresAt: expiresAt,
+    });
+
+    await axios.post(
+      `https://graph.instagram.com/v21.0/${igBusinessId}/subscribed_apps`,
+      null,
+      {
+        params: {
+          subscribed_fields: "comments,messages",
+          access_token: long_lived_token,
+        },
+      },
+    );
+
+    res.json({ success: true, username: realUsername });
+  } catch (err) {
+    console.error(
+      "complete-instagram-connect error:",
+      err.response?.data || err.message,
+    );
+    res.status(500).json({ error: "failed to complete connection" });
+  }
+});
+
 app.get("/api/ig-accounts", async (req, res) => {
   const { user_id } = req.query;
   if (!user_id) return res.status(400).json({ error: "missing user_id" });
