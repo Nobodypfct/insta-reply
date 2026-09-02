@@ -41,7 +41,7 @@ async function findByBusinessId(igBusinessId) {
 async function findByUserId(userId) {
   const { data, error } = await supabase
     .from('ig_accounts')
-    .select('id, ig_business_id, username, webhook_enabled, created_at')
+    .select('id, ig_business_id, username, avatar_url, webhook_enabled, created_at')
     .eq('user_id', userId);
 
   if (error) {
@@ -72,24 +72,26 @@ async function checkOwner(igBusinessId) {
 // создать или обновить ig_account (используется при OAuth-подключении).
 // возвращает { conflict: true, existingOwnerEmail } если аккаунт уже занят
 // другим юзером и forceTransfer не передан явно
-async function upsert({ userId, igBusinessId, username, pageAccessToken, tokenExpiresAt, forceTransfer }) {
+async function upsert({ userId, igBusinessId, username, avatarUrl, pageAccessToken, tokenExpiresAt, forceTransfer }) {
   const existingOwner = await checkOwner(igBusinessId);
   if (existingOwner && existingOwner.userId !== userId && !forceTransfer) {
     return { conflict: true, existingOwnerEmail: existingOwner.maskedEmail };
   }
 
+  const row = {
+    user_id: userId,
+    ig_business_id: igBusinessId,
+    username,
+    page_access_token: pageAccessToken,
+    token_expires_at: tokenExpiresAt,
+  };
+  // не затираем сохранённый аватар значением null, если Instagram вдруг
+  // не отдал profile_picture_url при повторном подключении
+  if (avatarUrl !== undefined && avatarUrl !== null) row.avatar_url = avatarUrl;
+
   const { data, error } = await supabase
     .from('ig_accounts')
-    .upsert(
-      {
-        user_id: userId,
-        ig_business_id: igBusinessId,
-        username,
-        page_access_token: pageAccessToken,
-        token_expires_at: tokenExpiresAt,
-      },
-      { onConflict: 'ig_business_id' }
-    )
+    .upsert(row, { onConflict: 'ig_business_id' })
     .select()
     .single();
 

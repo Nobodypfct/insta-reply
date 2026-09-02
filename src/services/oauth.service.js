@@ -9,13 +9,14 @@ const TOKEN_LIFETIME_MS = 60 * 24 * 60 * 60 * 1000; // 60 дней
 // возвращает { conflict: true, existingOwnerEmail, username } если аккаунт
 // уже подключён другим юзером и forceTransfer не передан
 async function completeConnection({ userId, longLivedToken, forceTransfer }) {
-  const { igBusinessId, username } = await instagramService.getMe(longLivedToken);
+  const { igBusinessId, username, profilePictureUrl } = await instagramService.getMe(longLivedToken);
 
   const expiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS).toISOString();
   const savedAccount = await igAccountRepo.upsert({
     userId,
     igBusinessId,
     username,
+    avatarUrl: profilePictureUrl,
     pageAccessToken: longLivedToken,
     tokenExpiresAt: expiresAt,
     forceTransfer,

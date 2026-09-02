@@ -124,10 +124,13 @@ async function subscribeToWebhooks(accessToken, igBusinessId) {
 // self-serve OAuth через www.instagram.com/oauth/authorize)
 async function getMe(accessToken) {
   const res = await axios.get(`${BASE_URL}/me`, {
-    params: { fields: 'id,user_id,username', access_token: accessToken },
+    params: {
+      fields: 'id,user_id,username,profile_picture_url',
+      access_token: accessToken,
+    },
   });
-  const { id, user_id: userIdField, username } = res.data;
-  return { igBusinessId: userIdField || id, username };
+  const { id, user_id: userIdField, username, profile_picture_url: profilePictureUrl } = res.data;
+  return { igBusinessId: userIdField || id, username, profilePictureUrl: profilePictureUrl || null };
 }
 
 // последние посты аккаунта - для выбора конкретного поста при создании шаблона
