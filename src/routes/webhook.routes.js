@@ -24,6 +24,20 @@ router.post('/webhook', async (req, res) => {
   try {
     const entries = req.body.entry || [];
     for (const entry of entries) {
+      // messaging-события (клик по кнопке в DM) приходят в другом формате,
+      // чем comments: entry.messaging[] вместо entry.changes[]
+      if (Array.isArray(entry.messaging)) {
+        for (const event of entry.messaging) {
+          if (!event.postback) continue;
+          // для messaging бизнес-аккаунт = получатель (recipient.id);
+          // entry.id тоже обычно он, но recipient надёжнее
+          const igBusinessId = event.recipient?.id || entry.id;
+          const senderId = event.sender?.id;
+          await webhookService.handlePostback(igBusinessId, senderId, event.postback.payload);
+        }
+        continue;
+      }
+
       const changes = entry.changes || [];
       for (const change of changes) {
         if (change.field === 'comments') {

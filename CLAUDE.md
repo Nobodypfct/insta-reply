@@ -1,0 +1,113 @@
+# CLAUDE.md — ig-autoresponder (backend)
+
+Этот файл читает Claude Code при старте работы в этой директории. Держи его в
+курсе архитектуры и важных нюансов — это экономит часы на будущих сессиях.
+
+## Что это за проект
+
+Backend для Insta-Reply — SaaS, который автоматически отвечает на комментарии
+в Instagram и шлёт DM автору комментария. Мультитенантный: много юзеров, у
+каждого может быть несколько подключённых Instagram-аккаунтов.
+
+## Стек
+
+- Node.js + Express
+- Supabase (Postgres + Auth) как БД
+- Instagram Graph API (новый flow "Instagram API with Instagram Login", НЕ
+  старый "Facebook Login for Business")
+- Хостинг: Render
+
+## Архитектура
+
+Слоистая (routes → services → repositories), НЕ полный DDD — оправдано
+размером проекта.
+
+```
+server.js                          — только сборка Express-приложения
+src/
+  config/env.js                    — все переменные окружения в одном месте
+  lib/supabase.js                  — инициализация клиента
+  repositories/                    — SQL-запросы, ничего больше
+    igAccount.repository.js
+    template.repository.js
+    activityLog.repository.js
+  services/                        — бизнес-логика
+    instagram.service.js           — все вызовы к Instagram API
+    webhook.service.js             — обработка входящего комментария
+    oauth.service.js               — завершение OAuth-подключения
+  routes/                          — тонкий HTTP-слой
+    webhook.routes.js
+    igAccounts.routes.js
+    templates.routes.js
+```
+
+## Команды
+
+- `npm install` — установить зависимости
+- `npm start` — запустить сервер
+- `node -c <файл>` — быстрая проверка синтаксиса без запуска
+
+## КРИТИЧЕСКИ ВАЖНЫЕ грабли Instagram API (потрачены часы на их поиск)
+
+1. **Домен API**: используй `graph.instagram.com`, НЕ `graph.facebook.com`.
+   Токены нового flow (префикс `IGAA...`) не работают с `graph.facebook.com`
+   вообще — даёт "Cannot parse access token".
+
+2. **DM новому юзеру**: используй
+   `recipient: { comment_id: commentId }`, НЕ `recipient: { id: userId }`.
+   Это официальный способ написать первым тому, кто оставил комментарий.
+
+3. **Вебхуки в Development Mode не работают для реальных событий**, только
+   кнопка "Test" в дашборде. Приложение обязательно должно быть **Published**
+   (Publish в App Dashboard, требует Privacy Policy URL), иначе реальные
+   комментарии не долетают до вебхука — тестовые события идут другим путём
+   в обход этого ограничения.
+
+4. **ID аккаунта бывает в двух форматах** — `id` и `user_id` из ответа
+   `/me` могут ОТЛИЧАТЬСЯ. Вебхук использует формат из поля `user_id`,
+   не `id`. Всегда запрашивай `fields=id,user_id,username` и используй
+   `user_id || id`.
+
+5. **Reply-петля**: бот может отвечать сам себе, если не фильтровать
+   комментарии от `fromUserId === igAccount.ig_business_id`. Уже реализовано
+   в `webhook.service.js`, не убирай эту проверку.
+
+6. **API версия**: используем `v26.0` везде (актуальная на момент разработки).
+
+7. **`instagram_manage_comments` vs `instagram_business_manage_comments`** —
+   имена permissions ОТЛИЧАЮТСЯ в разных местах интерфейса meta developers.
+   Всегда сверяй с тем, что реально включено в App Dashboard → Permissions
+   and features, а не с тем, что написано в сторонних гайдах.
+
+## Важные решения архитектуры
+
+- **Мультитенантность**: `entry.id` из вебхука = `ig_business_id` аккаунта-
+  владельца поста. По нему ищем нужный `ig_account` в БД, не хардкодим.
+- **Модель шаблонов**: `templates` (scope: все посты / конкретный пост +
+  опциональное keyword-слово) + `template_replies` (варианты ответа,
+  рандомный выбор). Приоритет матчинга: пост-специфичный с keyword →
+  пост-специфичный catch-all → все-посты с keyword → все-посты catch-all.
+  Логика в `template.repository.js::matchTemplate`, покрыта юнит-тестами
+  (гоняй руками через `node -e`, отдельного test runner пока нет).
+- **Конфликт владельца аккаунта**: если юзер пытается подключить уже занятый
+  `ig_business_id` — НЕ перезаписываем молча, возвращаем 409 с замаскированным
+  email текущего владельца, фронтенд показывает подтверждение переноса
+  (как у ChatPlace).
+
+## Supabase-специфичное
+
+- **"Automatically expose new tables" выключен** — при создании НОВЫХ таблиц
+  всегда явно выдавай права: `grant all on public.<table> to service_role;`
+  Забытый grant = тихая ошибка "permission denied", код не крашится, просто
+  возвращает null/пустой массив.
+- **`profiles` не создаётся автоматически** при регистрации через Supabase
+  Auth — есть SQL-триггер `handle_new_user()` на `auth.users`, который это
+  делает. Если он не запускался — foreign key ошибки при вставке в
+  `ig_accounts`.
+
+## Что НЕ делать
+
+- не хардкодь `IG_BUSINESS_ID`/`PAGE_ACCESS_TOKEN` в код — всё живёт в БД
+- не используй `graph.facebook.com` ни для чего в этом проекте
+- self-serve OAuth живёт на ФРОНТЕНДЕ через Auth.js, не здесь — этот backend
+  только принимает уже готовый long-lived токен на `/api/complete-instagram-connect`

@@ -36,10 +36,83 @@ async function sendDirectMessage(accessToken, igBusinessId, commentId, message) 
   }
 }
 
+// отправить обычный текстовый DM по instagram-scoped id получателя.
+// в отличие от sendDirectMessage (там recipient: { comment_id }, способ
+// написать ПЕРВЫМ автору коммента), тут recipient: { id } - юзер уже
+// написал боту / нажал кнопку, так что прямая отправка по id разрешена
+async function sendTextMessage(accessToken, igBusinessId, recipientId, message) {
+  try {
+    await axios.post(
+      `${BASE_URL}/${igBusinessId}/messages`,
+      {
+        recipient: { id: recipientId },
+        message: { text: message },
+      },
+      { params: { access_token: accessToken } }
+    );
+    console.log(`sent text DM to ${recipientId}`);
+    return true;
+  } catch (err) {
+    console.error('text message error:', err.response?.data || err.message);
+    return false;
+  }
+}
+
+// отправить сообщение с одной postback-кнопкой (Button Template).
+// обычный текст кнопку не даёт, а postback нужен, чтобы клик прилетел
+// вебхуком messaging_postbacks с нашим payload.
+// recipient принимает строку (тогда recipient: { id }) ЛИБО объект -
+// для ПЕРВОГО сообщения свежему комментатору нужен { comment_id } (см.
+// грабли #2 в CLAUDE.md: по id ему написать первым нельзя)
+async function sendButtonMessage(accessToken, igBusinessId, recipient, text, buttonText, payload) {
+  const recipientObj = typeof recipient === 'string' ? { id: recipient } : recipient;
+  try {
+    await axios.post(
+      `${BASE_URL}/${igBusinessId}/messages`,
+      {
+        recipient: recipientObj,
+        message: {
+          attachment: {
+            type: 'template',
+            payload: {
+              template_type: 'button',
+              text,
+              buttons: [{ type: 'postback', title: buttonText, payload }],
+            },
+          },
+        },
+      },
+      { params: { access_token: accessToken } }
+    );
+    console.log(`sent button message to ${JSON.stringify(recipientObj)} (payload="${payload}")`);
+    return true;
+  } catch (err) {
+    console.error('button message error:', err.response?.data || err.message);
+    return false;
+  }
+}
+
+// подписан ли юзер на бизнес-аккаунт. ВАЖНО: вызывать ТОЛЬКО после того,
+// как юзер сам провзаимодействовал с ботом (написал/нажал кнопку в DM) -
+// до этого поле недоступно ("нет user consent") и запрос падает.
+// при ошибке возвращаем null ("неизвестно"), НЕ false - это разные случаи
+async function checkIsFollower(accessToken, commenterId) {
+  try {
+    const res = await axios.get(`${BASE_URL}/${commenterId}`, {
+      params: { fields: 'is_user_follow_business', access_token: accessToken },
+    });
+    const value = res.data?.is_user_follow_business;
+    return typeof value === 'boolean' ? value : null;
+  } catch (err) {
+    console.error('checkIsFollower error:', err.response?.data || err.message);
+    return null;
+  }
+}
+
 async function subscribeToWebhooks(accessToken, igBusinessId) {
   await axios.post(`${BASE_URL}/${igBusinessId}/subscribed_apps`, null, {
     params: {
-      subscribed_fields: 'comments,messages',
+      subscribed_fields: 'comments,messages,messaging_postbacks',
       access_token: accessToken,
     },
   });
@@ -69,4 +142,13 @@ async function getRecentMedia(accessToken, igBusinessId, limit = 25) {
   return res.data.data || [];
 }
 
-module.exports = { replyToComment, sendDirectMessage, subscribeToWebhooks, getMe, getRecentMedia };
+module.exports = {
+  replyToComment,
+  sendDirectMessage,
+  sendTextMessage,
+  sendButtonMessage,
+  checkIsFollower,
+  subscribeToWebhooks,
+  getMe,
+  getRecentMedia,
+};

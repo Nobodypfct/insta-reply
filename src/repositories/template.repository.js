@@ -51,16 +51,52 @@ function pickRandomReply(template) {
   return variants[Math.floor(Math.random() * variants.length)];
 }
 
+// поля сценария "проверка подписки" - опциональны, задаются только если
+// пришли в запросе (иначе полагаемся на дефолты столбцов в БД)
+function applyFollowCheckFields(target, src) {
+  const {
+    requireFollowCheck,
+    buttonTextInitial,
+    messageIfNotFollowing,
+    buttonTextFollowConfirm,
+    messageAfterFollow,
+  } = src;
+  if (requireFollowCheck !== undefined) target.require_follow_check = !!requireFollowCheck;
+  if (buttonTextInitial !== undefined) target.button_text_initial = buttonTextInitial;
+  if (messageIfNotFollowing !== undefined) target.message_if_not_following = messageIfNotFollowing;
+  if (buttonTextFollowConfirm !== undefined) target.button_text_follow_confirm = buttonTextFollowConfirm;
+  if (messageAfterFollow !== undefined) target.message_after_follow = messageAfterFollow;
+}
+
+// получить один шаблон по id вместе с вариантами ответов -
+// нужно вебхуку postback'ов, где на руках только template_id из состояния
+async function findById(templateId) {
+  const { data, error } = await supabase
+    .from('templates')
+    .select('*, template_replies(id, text)')
+    .eq('id', templateId)
+    .single();
+
+  if (error) {
+    console.error('template.findById error:', error.message);
+    return null;
+  }
+  return data;
+}
+
 // создать новый шаблон с вариантами ответов
-async function create({ igAccountId, postId, keyword, dmText, replyTexts }) {
+async function create({ igAccountId, postId, keyword, dmText, replyTexts, ...rest }) {
+  const insert = {
+    ig_account_id: igAccountId,
+    post_id: postId || null,
+    keyword: keyword || null,
+    dm_text: dmText || DEFAULT_DM_TEXT,
+  };
+  applyFollowCheckFields(insert, rest);
+
   const { data: template, error } = await supabase
     .from('templates')
-    .insert({
-      ig_account_id: igAccountId,
-      post_id: postId || null,
-      keyword: keyword || null,
-      dm_text: dmText || DEFAULT_DM_TEXT,
-    })
+    .insert(insert)
     .select()
     .single();
 
@@ -77,12 +113,13 @@ async function create({ igAccountId, postId, keyword, dmText, replyTexts }) {
   return template;
 }
 
-async function update(templateId, { postId, keyword, dmText, isActive }) {
+async function update(templateId, { postId, keyword, dmText, isActive, ...rest }) {
   const patch = {};
   if (postId !== undefined) patch.post_id = postId || null;
   if (keyword !== undefined) patch.keyword = keyword || null;
   if (dmText !== undefined) patch.dm_text = dmText;
   if (isActive !== undefined) patch.is_active = isActive;
+  applyFollowCheckFields(patch, rest);
 
   const { data, error } = await supabase
     .from('templates')
@@ -142,6 +179,7 @@ async function clearForAccount(igAccountId) {
 
 module.exports = {
   findAllByAccount,
+  findById,
   matchTemplate,
   pickRandomReply,
   create,
