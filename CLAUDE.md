@@ -30,11 +30,13 @@ src/
   repositories/                    — SQL-запросы, ничего больше
     igAccount.repository.js
     template.repository.js
+    conversationState.repository.js — состояние диалога "проверка подписки"
     activityLog.repository.js
   services/                        — бизнес-логика
     instagram.service.js           — все вызовы к Instagram API
-    webhook.service.js             — обработка входящего комментария
+    webhook.service.js             — обработка входящего комментария/postback
     oauth.service.js               — завершение OAuth-подключения
+    igAccount.service.js           — список аккаунтов + TTL-рефреш аватарки
   routes/                          — тонкий HTTP-слой
     webhook.routes.js
     igAccounts.routes.js
@@ -73,8 +75,18 @@ src/
    Была неопределённость, действительно ли это поле доступно новому flow —
    да, доступно. Запрашиваем `fields=id,user_id,username,profile_picture_url`,
    сохраняем в `ig_accounts.avatar_url` (nullable — IG иногда отдаёт без
-   аватара). URL с `fbcdn.net`, срок жизни ограничен, при повторном
-   подключении обновляется.
+   аватара). URL с `fbcdn.net` подписанный и с коротким TTL — протухает.
+
+   **Обновление аватарки (TTL-gated, без крона)**: фронт присылает свежий
+   `profile_picture_url` в теле `POST /api/complete-instagram-connect` —
+   его и сохраняем (приоритет над тем, что вернул `/me`), проставляя
+   `avatar_url_updated_at = now()`. На чтении (`GET /api/ig-accounts`,
+   сборка шейпа в `igAccount.service.js`) если `avatar_url_updated_at`
+   пустой или старше 24ч — делаем ОДИН запрос `/me?fields=profile_picture_url`
+   токеном аккаунта, пишем результат в БД. Сбой рефреша (токен отозван,
+   Graph API упал) — тихо отдаём то, что в БД (может быть null/протухшее),
+   ответ не роняем. Крон/воркер/своё хранилище картинок — сознательно НЕ
+   делаем, следующий шаг эскалации при ненадёжности — качать картинку к себе.
 
 5. **Reply-петля**: бот может отвечать сам себе, если не фильтровать
    комментарии от `fromUserId === igAccount.ig_business_id`. Уже реализовано

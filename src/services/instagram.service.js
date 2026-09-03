@@ -133,6 +133,23 @@ async function getMe(accessToken) {
   return { igBusinessId: userIdField || id, username, profilePictureUrl: profilePictureUrl || null };
 }
 
+// свежий profile_picture_url для уже подключённого аккаунта (TTL-рефреш
+// аватарки на чтении). URL от Instagram подписанный и с ограниченным TTL,
+// поэтому периодически протухает и его надо перезапрашивать.
+// НЕ бросает: при любой ошибке (токен отозван, Graph API упал) возвращает
+// null - вызывающий код в этом случае отдаёт то, что уже лежит в БД
+async function fetchProfilePictureUrl(accessToken) {
+  try {
+    const res = await axios.get(`${BASE_URL}/me`, {
+      params: { fields: 'profile_picture_url', access_token: accessToken },
+    });
+    return res.data?.profile_picture_url || null;
+  } catch (err) {
+    console.error('fetchProfilePictureUrl error:', err.response?.data || err.message);
+    return null;
+  }
+}
+
 // последние посты аккаунта - для выбора конкретного поста при создании шаблона
 async function getRecentMedia(accessToken, igBusinessId, limit = 25) {
   const res = await axios.get(`${BASE_URL}/${igBusinessId}/media`, {
@@ -153,5 +170,6 @@ module.exports = {
   checkIsFollower,
   subscribeToWebhooks,
   getMe,
+  fetchProfilePictureUrl,
   getRecentMedia,
 };

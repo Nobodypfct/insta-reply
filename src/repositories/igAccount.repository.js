@@ -37,11 +37,16 @@ async function findByBusinessId(igBusinessId) {
   return data;
 }
 
-// получить все подключённые аккаунты конкретного юзера (для дашборда)
+// получить все подключённые аккаунты конкретного юзера (для дашборда).
+// возвращает page_access_token и avatar_url_updated_at - они нужны слою
+// сервиса для TTL-рефреша аватарки; в HTTP-ответ их класть НЕЛЬЗЯ,
+// igAccount.service.js собирает публичный шейп сам
 async function findByUserId(userId) {
   const { data, error } = await supabase
     .from('ig_accounts')
-    .select('id, ig_business_id, username, avatar_url, webhook_enabled, created_at')
+    .select(
+      'id, ig_business_id, username, avatar_url, avatar_url_updated_at, page_access_token, webhook_enabled, created_at'
+    )
     .eq('user_id', userId);
 
   if (error) {
@@ -49,6 +54,18 @@ async function findByUserId(userId) {
     return [];
   }
   return data;
+}
+
+// обновить сохранённую аватарку и метку времени (TTL-рефреш на чтении)
+async function updateAvatar(id, avatarUrl) {
+  const { error } = await supabase
+    .from('ig_accounts')
+    .update({ avatar_url: avatarUrl, avatar_url_updated_at: new Date().toISOString() })
+    .eq('id', id);
+
+  if (error) {
+    console.error('igAccount.updateAvatar error:', error.message);
+  }
 }
 
 // проверяет, кому уже принадлежит этот ig_business_id (если кому-то) -
@@ -86,8 +103,13 @@ async function upsert({ userId, igBusinessId, username, avatarUrl, pageAccessTok
     token_expires_at: tokenExpiresAt,
   };
   // не затираем сохранённый аватар значением null, если Instagram вдруг
-  // не отдал profile_picture_url при повторном подключении
-  if (avatarUrl !== undefined && avatarUrl !== null) row.avatar_url = avatarUrl;
+  // не отдал profile_picture_url при повторном подключении (или старый
+  // фронтенд не прислал поле). Если прислал - обновляем и метку времени,
+  // чтобы TTL-рефреш не дёргал Graph API сразу после подключения
+  if (avatarUrl !== undefined && avatarUrl !== null) {
+    row.avatar_url = avatarUrl;
+    row.avatar_url_updated_at = new Date().toISOString();
+  }
 
   const { data, error } = await supabase
     .from('ig_accounts')
@@ -104,4 +126,4 @@ async function upsert({ userId, igBusinessId, username, avatarUrl, pageAccessTok
   return { ...data, _isTransfer: isTransfer };
 }
 
-module.exports = { findById, findByBusinessId, findByUserId, checkOwner, upsert };
+module.exports = { findById, findByBusinessId, findByUserId, updateAvatar, checkOwner, upsert };

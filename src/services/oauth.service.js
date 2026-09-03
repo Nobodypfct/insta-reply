@@ -8,15 +8,21 @@ const TOKEN_LIFETIME_MS = 60 * 24 * 60 * 60 * 1000; // 60 дней
 // сохраняет аккаунт, подписывает на вебхуки.
 // возвращает { conflict: true, existingOwnerEmail, username } если аккаунт
 // уже подключён другим юзером и forceTransfer не передан
-async function completeConnection({ userId, longLivedToken, forceTransfer }) {
-  const { igBusinessId, username, profilePictureUrl } = await instagramService.getMe(longLivedToken);
+async function completeConnection({ userId, longLivedToken, profilePictureUrl, forceTransfer }) {
+  const { igBusinessId, username, profilePictureUrl: meProfilePictureUrl } =
+    await instagramService.getMe(longLivedToken);
+
+  // приоритет у значения из тела запроса (фронт присылает свежий URL с
+  // экрана подключения); если старый фронт его не прислал - берём то, что
+  // вернул /me. Оба могут быть null - это ок, avatar_url nullable
+  const avatarUrl = profilePictureUrl || meProfilePictureUrl || null;
 
   const expiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS).toISOString();
   const savedAccount = await igAccountRepo.upsert({
     userId,
     igBusinessId,
     username,
-    avatarUrl: profilePictureUrl,
+    avatarUrl,
     pageAccessToken: longLivedToken,
     tokenExpiresAt: expiresAt,
     forceTransfer,

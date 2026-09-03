@@ -1,16 +1,19 @@
 const express = require('express');
 const igAccountRepo = require('../repositories/igAccount.repository');
+const igAccountService = require('../services/igAccount.service');
 const oauthService = require('../services/oauth.service');
 const instagramService = require('../services/instagram.service');
 
 const router = express.Router();
 
-// список подключённых аккаунтов юзера - для дашборда
+// список подключённых аккаунтов юзера - для дашборда.
+// avatar_url при необходимости лениво обновляется из Graph API (см.
+// igAccount.service.js) - не чаще раза в 24ч на аккаунт
 router.get('/api/ig-accounts', async (req, res) => {
   const { user_id: userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'missing user_id' });
 
-  const accounts = await igAccountRepo.findByUserId(userId);
+  const accounts = await igAccountService.listForUser(userId);
   res.json({ accounts });
 });
 
@@ -33,7 +36,12 @@ router.get('/api/ig-accounts/:igAccountId/media', async (req, res) => {
 // принимает long-lived токен, полученный на фронтенде через Auth.js,
 // сохраняет аккаунт и подписывает на вебхуки
 router.post('/api/complete-instagram-connect', async (req, res) => {
-  const { user_id: userId, long_lived_token: longLivedToken, force_transfer: forceTransfer } = req.body;
+  const {
+    user_id: userId,
+    long_lived_token: longLivedToken,
+    profile_picture_url: profilePictureUrl,
+    force_transfer: forceTransfer,
+  } = req.body;
 
   if (!userId || !longLivedToken) {
     return res.status(400).json({ error: 'missing required fields' });
@@ -43,6 +51,7 @@ router.post('/api/complete-instagram-connect', async (req, res) => {
     const result = await oauthService.completeConnection({
       userId,
       longLivedToken,
+      profilePictureUrl,
       forceTransfer: forceTransfer === true,
     });
 
