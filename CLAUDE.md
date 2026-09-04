@@ -109,6 +109,15 @@ src/
   пост-специфичный catch-all → все-посты с keyword → все-посты catch-all.
   Логика в `template.repository.js::matchTemplate`, покрыта юнит-тестами
   (гоняй руками через `node -e`, отдельного test runner пока нет).
+- **Опциональные поля шаблона** мапятся из camelCase тела запроса в
+  snake_case колонки через `template.repository.js::applyOptionalTemplateFields`
+  (одно место для create и update). Две группы:
+  `require_follow_check` + `button_text_initial` / `message_if_not_following` /
+  `button_text_follow_confirm` / `message_after_follow` — сценарий "проверка
+  подписки" (postback-кнопки, есть state machine в `webhook.service.js`);
+  `link_button_text` / `link_button_url` — обычная кнопка со ссылкой под
+  финальным сообщением, БЕЗ логики (чистый CRUD, `""` = кнопки нет).
+  Не путать эти две группы.
 - **Конфликт владельца аккаунта**: если юзер пытается подключить уже занятый
   `ig_business_id` — НЕ перезаписываем молча, возвращаем 409 с замаскированным
   email текущего владельца, фронтенд показывает подтверждение переноса

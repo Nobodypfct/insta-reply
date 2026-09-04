@@ -25,6 +25,8 @@ router.post('/api/ig-accounts/:igAccountId/templates', async (req, res) => {
     messageIfNotFollowing,
     buttonTextFollowConfirm,
     messageAfterFollow,
+    linkButtonText,
+    linkButtonUrl,
   } = req.body;
 
   if (!replyTexts || replyTexts.length === 0) {
@@ -42,6 +44,8 @@ router.post('/api/ig-accounts/:igAccountId/templates', async (req, res) => {
     messageIfNotFollowing,
     buttonTextFollowConfirm,
     messageAfterFollow,
+    linkButtonText,
+    linkButtonUrl,
   });
   if (!template) return res.status(500).json({ error: 'не удалось создать шаблон' });
 
@@ -62,6 +66,8 @@ router.patch('/api/templates/:templateId', async (req, res) => {
     messageIfNotFollowing,
     buttonTextFollowConfirm,
     messageAfterFollow,
+    linkButtonText,
+    linkButtonUrl,
   } = req.body;
 
   const template = await templateRepo.update(templateId, {
@@ -74,6 +80,8 @@ router.patch('/api/templates/:templateId', async (req, res) => {
     messageIfNotFollowing,
     buttonTextFollowConfirm,
     messageAfterFollow,
+    linkButtonText,
+    linkButtonUrl,
   });
   if (!template) return res.status(500).json({ error: 'не удалось обновить шаблон' });
 

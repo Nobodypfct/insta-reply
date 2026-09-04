@@ -51,21 +51,29 @@ function pickRandomReply(template) {
   return variants[Math.floor(Math.random() * variants.length)];
 }
 
-// поля сценария "проверка подписки" - опциональны, задаются только если
-// пришли в запросе (иначе полагаемся на дефолты столбцов в БД)
-function applyFollowCheckFields(target, src) {
+// опциональные поля шаблона (сценарий "проверка подписки" + кнопка-ссылка
+// под финальным сообщением) - задаются только если пришли в запросе,
+// иначе полагаемся на дефолты/nullable столбцов в БД.
+// link_button_* - это ОБЫЧНАЯ кнопка со ссылкой (открывает URL), не путать
+// с button_text_initial/button_text_follow_confirm (postback, триггерят
+// следующее сообщение бота). Пустая строка "" = кнопки нет, так и храним.
+function applyOptionalTemplateFields(target, src) {
   const {
     requireFollowCheck,
     buttonTextInitial,
     messageIfNotFollowing,
     buttonTextFollowConfirm,
     messageAfterFollow,
+    linkButtonText,
+    linkButtonUrl,
   } = src;
   if (requireFollowCheck !== undefined) target.require_follow_check = !!requireFollowCheck;
   if (buttonTextInitial !== undefined) target.button_text_initial = buttonTextInitial;
   if (messageIfNotFollowing !== undefined) target.message_if_not_following = messageIfNotFollowing;
   if (buttonTextFollowConfirm !== undefined) target.button_text_follow_confirm = buttonTextFollowConfirm;
   if (messageAfterFollow !== undefined) target.message_after_follow = messageAfterFollow;
+  if (linkButtonText !== undefined) target.link_button_text = linkButtonText;
+  if (linkButtonUrl !== undefined) target.link_button_url = linkButtonUrl;
 }
 
 // получить один шаблон по id вместе с вариантами ответов -
@@ -92,7 +100,7 @@ async function create({ igAccountId, postId, keyword, dmText, replyTexts, ...res
     keyword: keyword || null,
     dm_text: dmText || DEFAULT_DM_TEXT,
   };
-  applyFollowCheckFields(insert, rest);
+  applyOptionalTemplateFields(insert, rest);
 
   const { data: template, error } = await supabase
     .from('templates')
@@ -119,7 +127,7 @@ async function update(templateId, { postId, keyword, dmText, isActive, ...rest }
   if (keyword !== undefined) patch.keyword = keyword || null;
   if (dmText !== undefined) patch.dm_text = dmText;
   if (isActive !== undefined) patch.is_active = isActive;
-  applyFollowCheckFields(patch, rest);
+  applyOptionalTemplateFields(patch, rest);
 
   const { data, error } = await supabase
     .from('templates')
