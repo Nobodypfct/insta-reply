@@ -109,6 +109,12 @@ src/
   пост-специфичный catch-all → все-посты с keyword → все-посты catch-all.
   Логика в `template.repository.js::matchTemplate`, покрыта юнит-тестами
   (гоняй руками через `node -e`, отдельного test runner пока нет).
+  На аккаунт допустим только ОДИН шаблон с `post_id IS NULL` ("любой пост"),
+  независимо от `is_active`/`keyword`. Проверка в `templates.routes.js`
+  (POST/PATCH) через `template.repository.js::hasAnyPostTemplate` — при
+  нарушении 409 `{ code: "any_post_template_exists", message }`. Это вторая
+  линия защиты, основную держит фронт; при ошибке запроса проверка
+  пропускает (fail-open).
 - **Опциональные поля шаблона** мапятся из camelCase тела запроса в
   snake_case колонки через `template.repository.js::applyOptionalTemplateFields`
   (одно место для create и update). Две группы:

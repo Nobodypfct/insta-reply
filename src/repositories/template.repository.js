@@ -76,6 +76,30 @@ function applyOptionalTemplateFields(target, src) {
   if (linkButtonUrl !== undefined) target.link_button_url = linkButtonUrl;
 }
 
+// есть ли у аккаунта хоть один шаблон на "любой пост" (post_id IS NULL).
+// правило blanket: is_active и keyword не важны, любой такой шаблон
+// делает слот занятым. exceptId исключается из проверки - это сам
+// редактируемый шаблон при PATCH, чтобы any-post шаблон не конфликтовал
+// сам с собой. При ошибке запроса возвращаем false (вторая линия защиты,
+// основная - на фронте; лучше пропустить, чем ложно отклонить).
+async function hasAnyPostTemplate(igAccountId, exceptId = null) {
+  let query = supabase
+    .from('templates')
+    .select('id')
+    .eq('ig_account_id', igAccountId)
+    .is('post_id', null);
+
+  if (exceptId) query = query.neq('id', exceptId);
+
+  const { data, error } = await query.limit(1);
+
+  if (error) {
+    console.error('template.hasAnyPostTemplate error:', error.message);
+    return false;
+  }
+  return data.length > 0;
+}
+
 // получить один шаблон по id вместе с вариантами ответов -
 // нужно вебхуку postback'ов, где на руках только template_id из состояния
 async function findById(templateId) {
@@ -188,6 +212,7 @@ async function clearForAccount(igAccountId) {
 module.exports = {
   findAllByAccount,
   findById,
+  hasAnyPostTemplate,
   matchTemplate,
   pickRandomReply,
   create,
