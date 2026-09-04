@@ -13,7 +13,7 @@ async function replyToComment(accessToken, commentId, message) {
     console.log(`replied to comment ${commentId}`);
     return true;
   } catch (err) {
-    console.error('reply error:', err.response?.data || err.message);
+    console.error('reply error:', err.message);
     return false;
   }
 }
@@ -31,7 +31,7 @@ async function sendDirectMessage(accessToken, igBusinessId, commentId, message) 
     console.log(`sent DM for comment ${commentId}`);
     return true;
   } catch (err) {
-    console.error('dm error:', err.response?.data || err.message);
+    console.error('dm error:', err.message);
     return false;
   }
 }
@@ -53,7 +53,7 @@ async function sendTextMessage(accessToken, igBusinessId, recipientId, message) 
     console.log(`sent text DM to ${recipientId}`);
     return true;
   } catch (err) {
-    console.error('text message error:', err.response?.data || err.message);
+    console.error('text message error:', err.message);
     return false;
   }
 }
@@ -87,7 +87,7 @@ async function sendButtonMessage(accessToken, igBusinessId, recipient, text, but
     console.log(`sent button message to ${JSON.stringify(recipientObj)} (payload="${payload}")`);
     return true;
   } catch (err) {
-    console.error('button message error:', err.response?.data || err.message);
+    console.error('button message error:', err.message);
     return false;
   }
 }
@@ -104,7 +104,7 @@ async function checkIsFollower(accessToken, commenterId) {
     const value = res.data?.is_user_follow_business;
     return typeof value === 'boolean' ? value : null;
   } catch (err) {
-    console.error('checkIsFollower error:', err.response?.data || err.message);
+    console.error('checkIsFollower error:', err.message);
     return null;
   }
 }
@@ -145,7 +145,7 @@ async function fetchProfilePictureUrl(accessToken) {
     });
     return res.data?.profile_picture_url || null;
   } catch (err) {
-    console.error('fetchProfilePictureUrl error:', err.response?.data || err.message);
+    console.error('fetchProfilePictureUrl error:', err.message);
     return null;
   }
 }

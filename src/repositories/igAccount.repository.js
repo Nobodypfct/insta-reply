@@ -1,4 +1,21 @@
 const supabase = require('../lib/supabase');
+const tokenCipher = require('../lib/tokenCipher');
+
+// page_access_token лежит в БД зашифрованным (см. lib/tokenCipher.js).
+// Этот репозиторий - единственная точка шифрования: наружу всегда отдаём
+// открытый токен, внутрь пишем зашифрованный. Если строка не расшифровалась
+// (не тот ключ после кривой ротации, битые данные, plaintext до миграции) -
+// отдаём page_access_token = null и громко логируем; строку не роняем,
+// дашборд живёт, аккаунт ведёт себя как с отозванным токеном.
+function decryptRow(row) {
+  if (!row || row.page_access_token == null) return row;
+  try {
+    return { ...row, page_access_token: tokenCipher.decrypt(row.page_access_token) };
+  } catch (err) {
+    console.error(`igAccount: не удалось расшифровать токен строки ${row.id}:`, err.message);
+    return { ...row, page_access_token: null };
+  }
+}
 
 // маскирует email как do***@gmail.com, для показа при конфликте владельца
 function maskEmail(email) {
@@ -18,7 +35,7 @@ async function findById(id) {
     console.error('igAccount.findById error:', error.message);
     return null;
   }
-  return data;
+  return decryptRow(data);
 }
 
 // найти подключённый аккаунт по его instagram business id
@@ -34,7 +51,7 @@ async function findByBusinessId(igBusinessId) {
     console.error('igAccount.findByBusinessId error:', error.message);
     return null;
   }
-  return data;
+  return decryptRow(data);
 }
 
 // получить все подключённые аккаунты конкретного юзера (для дашборда).
@@ -53,7 +70,7 @@ async function findByUserId(userId) {
     console.error('igAccount.findByUserId error:', error.message);
     return [];
   }
-  return data;
+  return data.map(decryptRow);
 }
 
 // обновить сохранённую аватарку и метку времени (TTL-рефреш на чтении)
@@ -99,7 +116,7 @@ async function upsert({ userId, igBusinessId, username, avatarUrl, pageAccessTok
     user_id: userId,
     ig_business_id: igBusinessId,
     username,
-    page_access_token: pageAccessToken,
+    page_access_token: tokenCipher.encrypt(pageAccessToken),
     token_expires_at: tokenExpiresAt,
   };
   // не затираем сохранённый аватар значением null, если Instagram вдруг
@@ -123,7 +140,7 @@ async function upsert({ userId, igBusinessId, username, avatarUrl, pageAccessTok
   }
 
   const isTransfer = existingOwner && existingOwner.userId !== userId;
-  return { ...data, _isTransfer: isTransfer };
+  return { ...decryptRow(data), _isTransfer: isTransfer };
 }
 
 module.exports = { findById, findByBusinessId, findByUserId, updateAvatar, checkOwner, upsert };

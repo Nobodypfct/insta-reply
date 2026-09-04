@@ -10,6 +10,10 @@ const env = {
   frontendUrl: process.env.FRONTEND_URL,
   verifyToken: process.env.VERIFY_TOKEN,
 
+  // ключ шифрования page_access_token в БД (AES-256-GCM), base64 от 32 байт.
+  // сгенерировать: openssl rand -base64 32
+  tokenEncKey: process.env.TOKEN_ENC_KEY,
+
   supabase: {
     url: supabaseUrl,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -36,12 +40,20 @@ const critical = [
   ['VERIFY_TOKEN', env.verifyToken],
   ['IG_APP_SECRET', env.instagram.appSecret],
   ['FRONTEND_URL', env.frontendUrl],
+  ['TOKEN_ENC_KEY', env.tokenEncKey],
 ];
 
 const missing = critical.filter(([, value]) => !value).map(([name]) => name);
 if (missing.length > 0) {
   throw new Error(
     `не заданы обязательные переменные окружения: ${missing.join(', ')}`
+  );
+}
+
+// TOKEN_ENC_KEY должен декодиться ровно в 32 байта (ключ AES-256)
+if (Buffer.from(env.tokenEncKey, 'base64').length !== 32) {
+  throw new Error(
+    'TOKEN_ENC_KEY должен быть base64 от 32 байт (openssl rand -base64 32)'
   );
 }
 

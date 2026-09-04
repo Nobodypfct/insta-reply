@@ -27,6 +27,7 @@ server.js                          — только сборка Express-при�
 src/
   config/env.js                    — все переменные окружения в одном месте
   lib/supabase.js                  — инициализация клиента
+  lib/tokenCipher.js               — AES-256-GCM для page_access_token
   repositories/                    — SQL-запросы, ничего больше
     igAccount.repository.js
     template.repository.js
@@ -159,15 +160,40 @@ src/
   `crypto.timingSafeEqual`). Сырое тело берётся из `express.json({ verify })`
   в `server.js` (`req.rawBody`). Несовпадение/отсутствие → `403`, событие
   не обрабатывается. GET-проверку `hub.verify_token` не трогали.
+- **`page_access_token` шифруется at rest** — `lib/tokenCipher.js`,
+  AES-256-GCM, формат `"v1:<iv>:<tag>:<ciphertext>"` (всё base64), ключ
+  `TOKEN_ENC_KEY` (base64 от 32 байт, `openssl rand -base64 32`).
+  **Единственная точка** шифрования — `igAccount.repository.js`: `upsert`
+  шифрует, `findById` / `findByBusinessId` / `findByUserId` расшифровывают
+  (helper `decryptRow`). Слои services/routes про это не знают, получают
+  открытый токен. Ошибка расшифровки (не тот ключ, битые данные, plaintext
+  до миграции) → `page_access_token: null` + `console.error`, строка НЕ
+  роняется (аккаунт ведёт себя как с отозванным токеном). Legacy-passthrough
+  НЕТ намеренно — миграция обязательна (см. ниже). Защищает от утечки
+  дампа/бэкапа БД и логов; НЕ защищает от компрометации процесса — апгрейд
+  на KMS/Vault в TODO.
+- **Миграция `migration-encrypt-tokens.js`** (в корне, идемпотентна) —
+  прогнать РАЗ сразу после деплоя. Два режима: без флага печатает готовый SQL
+  в stdout (`node migration-encrypt-tokens.js > out.sql` → вставить в Supabase
+  SQL Editor); с `--apply` пишет напрямую через supabase-js. Чистого `.sql`-файла
+  быть не может — шифротекст делается ключом приложения. До прогона старые
+  plaintext-токены отдаются как `null`.
 - **env.js падает на старте**, если нет любой из: `SUPABASE_URL`,
-  `SUPABASE_SERVICE_ROLE_KEY`, `VERIFY_TOKEN`, `IG_APP_SECRET`, `FRONTEND_URL`
-  (раньше был мягкий `console.warn`). Отдельного JWT-секрета нет — JWKS публичный.
+  `SUPABASE_SERVICE_ROLE_KEY`, `VERIFY_TOKEN`, `IG_APP_SECRET`, `FRONTEND_URL`,
+  `TOKEN_ENC_KEY` (+ проверка, что `TOKEN_ENC_KEY` декодится ровно в 32 байта).
+  Раньше был мягкий `console.warn`. Отдельного JWT-секрета нет — JWKS публичный.
 - **CORS** — `cors({ origin: env.frontendUrl })`, `FRONTEND_URL` обязателен.
+- **Express-hardening** (`server.js`): `helmet()` (HSTS, nosniff, frameguard,
+  COOP/CORP, no-referrer), `app.disable('x-powered-by')`, явный
+  `express.json({ limit: '100kb' })`, единый error-handler в конце — наружу
+  не отдаёт стек (5xx → `{ code: "internal_error" }`, 4xx от body-parser →
+  `{ code: "bad_request", message }`).
 - **Логи**: не пишем `err.response?.data` из ошибок Graph API (могут содержать
-  токен) — только `err.message`.
-- **Тесты**: middleware покрыты (гонял через временный скрипт с `jose` +
-  локальным JWKS и заглушками репозиториев, 23 кейса). Постоянного раннера
-  нет — при доработке гоняй вручную так же.
+  PII/данные) — только `err.message` (везде в `instagram.service.js`).
+- **Тесты**: middleware + шифрование покрыты временными скриптами (`jose` +
+  локальный JWKS + заглушки репозиториев: 23 кейса auth/ownership/webhook;
+  `jose` GCM round-trip/tamper + choke-point репозитория: 20 кейсов).
+  Постоянного раннера нет — при доработке гоняй вручную так же.
 
 ## Supabase-специфичное
 
@@ -204,18 +230,37 @@ src/
 
 Приоритет сверху вниз. Первый пункт — следующая задача.
 
-- **Шифрование `page_access_token` в БД.** Сейчас лежит открытым текстом
-  (60-дневный токен с полным доступом к IG-аккаунту). Нужно: ключ шифрования
-  (env/KMS), AES-GCM, миграция существующих строк, расшифровка во всех местах
-  чтения токена (`igAccount.repository`, `oauth.service`, `igAccount.service`,
-  `webhook.service`). Если 24ч-рефреш аватарки окажется ненадёжным — та же
-  эскалация уже описана в граблях #4.
-- **`helmet`** — security-заголовки (HSTS, nosniff, frameguard и т.д.).
-- **Rate limiting** — на `POST /api/complete-instagram-connect`, CRUD шаблонов
-  и `POST /webhook` (`express-rate-limit` или на уровне Render/прокси).
+- **Рефреш Instagram-токена + reconnect UX.** Long-lived IG-токен живёт
+  60 дней, продлевается через
+  `GET /refresh_access_token?grant_type=ig_refresh_token&access_token=<текущий>`
+  (токен должен быть старше 24ч и не истёкшим). **Дизайн (согласован):**
+  - *Ленивый рефреш на чтении, без крона.* При любой загрузке токена аккаунта
+    (отправка из вебхука, TTL-рефреш аватара, `/media`) смотрим
+    `token_expires_at`; если до истечения < 10 дней — дёргаем refresh,
+    сохраняем новый токен через `tokenCipher.encrypt` и новый `token_expires_at`.
+    Тот же паттерн, что TTL-рефреш аватарки. Неактивный аккаунт (60 дней
+    никто не трогал) всё равно умрёт — терпимо, юзер переподключит.
+  - *Reconnect уже работает*: повторный `POST /api/complete-instagram-connect`
+    с тем же `ig_business_id` → `upsert` по `onConflict` обновляет строку,
+    шаблоны сохраняются (`_isTransfer=false`), `subscribeToWebhooks`
+    идемпотентен. Отдельной ручки не надо.
+  - *Признак для фронта*: в ответ `GET /api/ig-accounts` добавить
+    `token_expires_at` + `needs_reconnect: boolean` (near-expiry ИЛИ последний
+    вызов упал с ошибкой авторизации). Для «отзыв до истечения» может
+    понадобиться колонка `token_invalid_at`.
+  - Промпт для фронта на reconnect UX уже составлен (раздел 2 в задаче фронта).
+- **Rate limiting** — `express-rate-limit` на `POST /api/complete-instagram-connect`
+  и CRUD шаблонов; для `POST /webhook` аккуратно (лимит по IP не подойдёт —
+  это настоящая Meta; скорее на уровне Render/прокси). Подтверждено отдельной
+  задачей.
 - **Валидация входных данных** — сейчас `:id` и тела идут в Supabase как есть;
-  кривой UUID → необработанный 500. Нужна схема-валидация (zod/joi) на телах.
+  кривой UUID → 500 (теперь ловится общим error-handler, но лучше явный 400).
+  Нужна схема-валидация (zod/joi) на телах и параметрах.
 - **`npm audit`** — ни разу не гоняли; повесить в CI.
 - **RLS в Postgres как второй слой** — политики на все таблицы + клиент с
   anon-ключом и JWT юзера. Пути вебхука остаются на service-role. Defense in
   depth поверх проверок в `middleware/ownership.js`.
+- **Апгрейд шифрования токенов на KMS/Vault** — сейчас `TOKEN_ENC_KEY` в env
+  Render рядом с `SUPABASE_SERVICE_ROLE_KEY` (утечка env вскрывает оба).
+  Эскалация: корневой ключ в KMS (envelope encryption) либо Supabase Vault.
+  Формат `v1:` готов под смену схемы.
