@@ -2,7 +2,9 @@ const igAccountRepo = require('../repositories/igAccount.repository');
 const templateRepo = require('../repositories/template.repository');
 const activityLogRepo = require('../repositories/activityLog.repository');
 const conversationStateRepo = require('../repositories/conversationState.repository');
+const templateEventRepo = require('../repositories/templateEvent.repository');
 const instagramService = require('./instagram.service');
+const redirectLink = require('../lib/redirectLink');
 
 // сколько раз максимум переспрашиваем "ты точно подписался?" прежде чем сдаться
 const MAX_FOLLOW_CONFIRM_ATTEMPTS = 2;
@@ -11,6 +13,55 @@ const MAX_FOLLOW_CONFIRM_ATTEMPTS = 2;
 const FALLBACK_NOT_FOLLOWING =
   'Подпишись на аккаунт, чтобы получить материал, и нажми кнопку ниже 👇';
 const FALLBACK_AFTER_FOLLOW = 'Спасибо за подписку! Держи 🎉';
+
+// отправляет "финальное" сообщение шаблона - единственное сообщение при
+// отсутствии require_follow_check, либо reward после подтверждения подписки.
+// Если у шаблона задана кнопка-ссылка (link_button_url) - шлёт её web_url-
+// кнопкой через редирект-сервис (lib/redirectLink.js) и логирует событие
+// "link_sent" в аналитику; иначе - просто текст. Используется и для
+// comment-, и для dm-шаблонов - поле общее, sendReward уже origin-agnostic
+// (см. handlePostback), несимметрично оставлять только comment-ветку.
+//
+// recipient: строка (id, consent уже есть) ИЛИ { comment_id } (первое
+// сообщение свежему комментатору, см. грабли #2 в CLAUDE.md).
+async function sendFinalMessage(igAccount, template, recipient, text) {
+  const redirectUrl = template.link_button_url
+    ? redirectLink.buildRedirectUrl(template.id)
+    : null;
+
+  if (redirectUrl && template.link_button_text) {
+    const ok = await instagramService.sendLinkButtonMessage(
+      igAccount.page_access_token,
+      igAccount.ig_business_id,
+      recipient,
+      text,
+      template.link_button_text,
+      redirectUrl
+    );
+    if (ok) await templateEventRepo.log(template.id, 'link_sent');
+    return ok;
+  }
+
+  if (template.link_button_url && !redirectUrl) {
+    // BACKEND_URL не настроен - деградация, не hard-fail: шлём без кнопки
+    console.warn(`BACKEND_URL не настроен - шаблон ${template.id} отправлен без кнопки-ссылки`);
+  }
+
+  if (recipient && typeof recipient === 'object' && recipient.comment_id) {
+    return instagramService.sendDirectMessage(
+      igAccount.page_access_token,
+      igAccount.ig_business_id,
+      recipient.comment_id,
+      text
+    );
+  }
+  return instagramService.sendTextMessage(
+    igAccount.page_access_token,
+    igAccount.ig_business_id,
+    recipient,
+    text
+  );
+}
 
 // обрабатывает одно событие "новый комментарий" из вебхука:
 // находит владельца, подбирает подходящий шаблон (по посту/keyword),
@@ -51,6 +102,12 @@ async function handleNewComment(igBusinessId, commentData) {
     return;
   }
 
+  // аналитика: шаблон сработал на этот коммент - вход в воронку.
+  // Только comment-шаблоны (задача так и называлась) - у dm-шаблонов
+  // старта в этом смысле не определено, только link_sent/link_clicked
+  // (они текут через sendFinalMessage, общий с comment-веткой)
+  await templateEventRepo.log(matched.id, 'started');
+
   const replyText = templateRepo.pickRandomReply(matched);
   const replySuccess = await instagramService.replyToComment(
     igAccount.page_access_token,
@@ -80,13 +137,9 @@ async function handleNewComment(igBusinessId, commentData) {
       templateId: matched.id,
     });
   } else {
-    // обычное поведение - не трогаем
-    dmSuccess = await instagramService.sendDirectMessage(
-      igAccount.page_access_token,
-      igAccount.ig_business_id,
-      commentId,
-      matched.dm_text
-    );
+    // финальное (и единственное) сообщение сразу - через общий sendFinalMessage,
+    // чтобы кнопка-ссылка (если задана) ушла и залогировалась
+    dmSuccess = await sendFinalMessage(igAccount, matched, { comment_id: commentId }, matched.dm_text);
   }
 
   await activityLogRepo.log({
@@ -104,9 +157,9 @@ async function handleNewComment(igBusinessId, commentData) {
 
 // шлёт финальную "награду" и закрывает диалог
 async function sendReward(igAccount, state, template, recipientId) {
-  await instagramService.sendTextMessage(
-    igAccount.page_access_token,
-    igAccount.ig_business_id,
+  await sendFinalMessage(
+    igAccount,
+    template,
     recipientId,
     template.message_after_follow || FALLBACK_AFTER_FOLLOW
   );
@@ -247,12 +300,7 @@ async function handleIncomingDm(igBusinessId, senderId, messageText) {
     return;
   }
 
-  await instagramService.sendTextMessage(
-    igAccount.page_access_token,
-    igAccount.ig_business_id,
-    senderId,
-    matched.dm_text
-  );
+  await sendFinalMessage(igAccount, matched, senderId, matched.dm_text);
 }
 
 module.exports = { handleNewComment, handlePostback, handleIncomingDm };

@@ -100,8 +100,10 @@ function matchDmTemplate(templates, messageText) {
 // следующее сообщение бота). Пустая строка "" = кнопки нет, так и храним.
 // links/exactMatch - только для type:'dm', для type:'comment' игнорируются
 // на уровне логики (просто не читаются нигде, кроме matchDmTemplate).
+// name - просто человекочитаемое название шаблона для кабинета, чистый CRUD.
 function applyOptionalTemplateFields(target, src) {
   const {
+    name,
     requireFollowCheck,
     buttonTextInitial,
     messageIfNotFollowing,
@@ -112,6 +114,7 @@ function applyOptionalTemplateFields(target, src) {
     links,
     exactMatch,
   } = src;
+  if (name !== undefined) target.name = name;
   if (requireFollowCheck !== undefined) target.require_follow_check = !!requireFollowCheck;
   if (buttonTextInitial !== undefined) target.button_text_initial = buttonTextInitial;
   if (messageIfNotFollowing !== undefined) target.message_if_not_following = messageIfNotFollowing;

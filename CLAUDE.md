@@ -28,14 +28,16 @@ src/
   config/env.js                    — все переменные окружения в одном месте
   lib/supabase.js                  — инициализация клиента
   lib/tokenCipher.js               — AES-256-GCM для page_access_token
+  lib/redirectLink.js               — оборачивает link_button_url в /r/<id>
   repositories/                    — SQL-запросы, ничего больше
     igAccount.repository.js
     template.repository.js
+    templateEvent.repository.js    — time-series воронки шаблона (аналитика)
     conversationState.repository.js — состояние диалога "проверка подписки"
     activityLog.repository.js
   services/                        — бизнес-логика
     instagram.service.js           — все вызовы к Instagram API
-    webhook.service.js             — обработка входящего комментария/postback
+    webhook.service.js             — обработка входящего комментария/postback/DM
     oauth.service.js               — завершение OAuth-подключения
     igAccount.service.js           — список аккаунтов + TTL-рефреш аватарки
   middleware/                      — Express-middleware (аутентификация, доступ)
@@ -46,6 +48,7 @@ src/
     webhook.routes.js
     igAccounts.routes.js
     templates.routes.js
+    redirect.routes.js             — GET /r/:templateId, публичный, без auth
 ```
 
 ## Команды
@@ -117,6 +120,21 @@ src/
    для DM. Сообщение без `message.text` (стикер/вложение) тоже пропускаем -
    матчить не на что.
 
+9. **"webhook signature mismatch" на ВСЕХ событиях (и comments, и messaging)
+   без видимой причины** — почти наверняка `IG_APP_SECRET` на хостинге
+   (Render) просто не совпадает с реальным App Secret в Meta (протух после
+   regenerate, опечатка при копипасте, не тот env вообще). НЕ путать с
+   граблей DM-специфичной — подпись считается по сырым байтам всего тела,
+   контент (коммент/DM/postback) на неё не влияет, так что если mismatch
+   происходит на ВСЁМ — ищи проблему в секрете, а не в коде обработки
+   конкретного типа события. Диагностика без риска спалить секрет в логах:
+   временно залогировать при старте `sha256(IG_APP_SECRET).slice(0,12)`
+   и сравнить с `printf '%s' 'СЕКРЕТ_ИЗ_META' | shasum -a 256 | cut -c1-12`,
+   посчитанным локально из значения, которое реально показывает Meta App
+   Dashboard → App Settings → Basic → App Secret → Show. Не совпало —
+   вот и причина, вставить правильное значение на Render, редеплой.
+   Кейс 2026-09-04: ровно так и оказалось — секрет на Render был не тот.
+
 ## Важные решения архитектуры
 
 - **Мультитенантность**: `entry.id` из вебхука = `ig_business_id` аккаунта-
@@ -175,6 +193,58 @@ src/
   При нарушении 409 `{ code: "any_post_template_exists", message }`. Это
   вторая линия защиты, основную держит фронт; при ошибке запроса проверка
   пропускает (fail-open).
+- **`templates.name`** — человекочитаемое название для кабинета, nullable,
+  чистый CRUD через `applyOptionalTemplateFields`, никакой логики.
+- **Аналитика шаблонов (`template_events`)** — time-series, `(template_id,
+  event_type, created_at)`, `event_type` ∈ `started | link_sent | link_clicked`.
+  Агрегат "за всё время" через `templateEvent.repository.js::countsByTemplateIds`
+  (считает в JS из сырых строк, не SQL group by — как `matchTemplate` в этом
+  же файле). Отдаётся в ответах `templates.routes.js` как **`template.stats`**
+  (`{ started, link_sent, link_clicked }`, snake_case-ключи — соглашение
+  camelCase/snake_case ниже это требует, даже если в постановке задачи было
+  написано camelCase). GET-список — один запрос на все шаблоны разом, не
+  N+1. POST — `stats` нулевой без похода в БД (у нового шаблона событий
+  заведомо нет). PATCH — свежий агрегат.
+  - `started` логируется в `handleNewComment` сразу после матчинга, **только
+    для comment-шаблонов** (задача так и называлась — "аналитика для
+    comment-шаблонов"). У dm-шаблонов `started` не определён, `stats.started`
+    для них всегда 0, даже если есть `link_sent`/`link_clicked`.
+  - `link_sent`/`link_clicked` — **это МОЁ решение сделать их общими для
+    обоих типов**, не только comment: `link_sent` логируется в общем
+    `webhook.service.js::sendFinalMessage`, который и так уже шарился между
+    `handleNewComment` (comment, plain-ветка), `sendReward` в `handlePostback`
+    (reward после follow-check, origin-agnostic по дизайну — см. выше) и
+    `handleIncomingDm` (dm, plain-ветка). Раз `sendReward` уже одна на оба
+    типа, оставлять `link_sent` только для comment означало бы, что
+    dm-шаблон С follow-check получает кнопку-ссылку, а БЕЗ follow-check —
+    нет, чисто из-за реализации, не по смыслу. Если это неверно понял —
+    просто добавить `template.type === 'comment'` гвард в `sendFinalMessage`.
+- **Кнопка-ссылка теперь реально отправляется** (раньше `link_button_url`/
+  `link_button_text` были чистым CRUD, см. историю). `webhook.service.js::sendFinalMessage`
+  — общая точка отправки "финального" сообщения (единственное сообщение без
+  follow-check, либо reward). Если `link_button_url` задан — шлёт
+  `instagramService.sendLinkButtonMessage` (web_url-кнопка, НЕ postback,
+  `sendButtonMessage` для postback не трогали) с URL, обёрнутым через
+  `lib/redirectLink.js` в `{BACKEND_URL}/r/<templateId>`; иначе - обычный
+  текст (`sendDirectMessage`/`sendTextMessage`, в зависимости от формы
+  `recipient` - строка или `{ comment_id }`).
+- **Редирект-сервис `GET /r/:templateId`** (`routes/redirect.routes.js`,
+  публичный, без auth — юзер Instagram анонимен, Supabase-сессии у него нет
+  и не будет). Instagram НЕ шлёт вебхук на клик по web_url-кнопке (только
+  postback-кнопки это умеют) — это единственный способ узнать про клик:
+  лог `link_clicked` → `302` на настоящий `link_button_url`. **Не
+  open-redirect**: URL назначения читается из БД по `templateId`, не из
+  параметров запроса. **Важно**: `link_button_url` резолвится ЖИВЬЁМ в
+  момент клика, не снапшотится на момент отправки DM — если юзер поменяет
+  ссылку в кабинете, все уже разосланные redirect-ссылки поведут по НОВОМУ
+  адресу. Осознанный выбор ради простоты (без нужды в отдельной
+  per-отправка таблице) — если понадобится точный снапшот на момент
+  отправки, это отдельная эскалация.
+- **`BACKEND_URL`** (env, `env.js`) — публичный URL этого бэкенда, нужен
+  только для сборки redirect-ссылки. **Опционален, НЕ hard-fail** (в
+  отличие от остальных критичных переменных) — если не задан, кнопка-ссылка
+  просто не отправляется (fallback на текст, `console.warn`), это
+  деградация одной фичи, не проблема безопасности.
 - **Опциональные поля шаблона** мапятся из camelCase тела запроса в
   snake_case колонки через `template.repository.js::applyOptionalTemplateFields`
   (одно место для create и update). Две группы:

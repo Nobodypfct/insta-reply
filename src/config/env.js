@@ -10,6 +10,13 @@ const env = {
   frontendUrl: process.env.FRONTEND_URL,
   verifyToken: process.env.VERIFY_TOKEN,
 
+  // публичный URL ЭТОГО бэкенда (напр. https://ig-autoresponder.onrender.com) -
+  // нужен, чтобы собрать редирект-ссылку вида {backendUrl}/r/<templateId>
+  // для кнопок-ссылок в DM (см. lib/redirectLink.js). Опционально: без него
+  // просто не шлём кнопку-ссылку (fallback на обычный текст), не hard-fail -
+  // это фича, не безопасность. Без хвостового слэша, для чистой конкатенации.
+  backendUrl: process.env.BACKEND_URL?.trim().replace(/\/+$/, '') || null,
+
   // ключ шифрования page_access_token в БД (AES-256-GCM), base64 от 32 байт.
   // сгенерировать: openssl rand -base64 32
   tokenEncKey: process.env.TOKEN_ENC_KEY,

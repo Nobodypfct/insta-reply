@@ -92,6 +92,40 @@ async function sendButtonMessage(accessToken, igBusinessId, recipient, text, but
   }
 }
 
+// отправить сообщение с одной web_url-кнопкой (обычная кнопка-ссылка,
+// открывает URL) - НЕ путать с sendButtonMessage (там postback, триггерит
+// вебхук). У web_url-кнопки клика вебхука нет вообще, поэтому url сюда
+// всегда должен быть уже обёрнутым редиректом (см. lib/redirectLink.js) -
+// иначе клик просто негде залогировать.
+// recipient - то же самое, что у sendButtonMessage: строка ИЛИ { comment_id }
+async function sendLinkButtonMessage(accessToken, igBusinessId, recipient, text, buttonText, url) {
+  const recipientObj = typeof recipient === 'string' ? { id: recipient } : recipient;
+  try {
+    await axios.post(
+      `${BASE_URL}/${igBusinessId}/messages`,
+      {
+        recipient: recipientObj,
+        message: {
+          attachment: {
+            type: 'template',
+            payload: {
+              template_type: 'button',
+              text,
+              buttons: [{ type: 'web_url', title: buttonText, url }],
+            },
+          },
+        },
+      },
+      { params: { access_token: accessToken } }
+    );
+    console.log(`sent link button message to ${JSON.stringify(recipientObj)}`);
+    return true;
+  } catch (err) {
+    console.error('link button message error:', err.message);
+    return false;
+  }
+}
+
 // подписан ли юзер на бизнес-аккаунт. ВАЖНО: вызывать ТОЛЬКО после того,
 // как юзер сам провзаимодействовал с ботом (написал/нажал кнопку в DM) -
 // до этого поле недоступно ("нет user consent") и запрос падает.
@@ -167,6 +201,7 @@ module.exports = {
   sendDirectMessage,
   sendTextMessage,
   sendButtonMessage,
+  sendLinkButtonMessage,
   checkIsFollower,
   subscribeToWebhooks,
   getMe,

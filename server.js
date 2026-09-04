@@ -6,6 +6,7 @@ const { requireAuth } = require('./src/middleware/auth');
 const webhookRoutes = require('./src/routes/webhook.routes');
 const igAccountsRoutes = require('./src/routes/igAccounts.routes');
 const templatesRoutes = require('./src/routes/templates.routes');
+const redirectRoutes = require('./src/routes/redirect.routes');
 
 const app = express();
 
@@ -31,6 +32,10 @@ app.get('/', (req, res) => res.send('ig-autoresponder is running'));
 
 // вебхук аутентифицируется своей подписью (внутри роутера), не Bearer-токеном
 app.use(webhookRoutes);
+
+// публичный редирект для кнопок-ссылок в DM (клик реального юзера Instagram
+// в браузере - без Bearer-токена и без него не может быть)
+app.use(redirectRoutes);
 
 // всё под /api/* требует валидный Supabase JWT; req.userId ставится здесь
 app.use('/api', requireAuth);

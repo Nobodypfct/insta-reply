@@ -1,5 +1,6 @@
 const express = require('express');
 const templateRepo = require('../repositories/template.repository');
+const templateEventRepo = require('../repositories/templateEvent.repository');
 const {
   requireIgAccountOwnership,
   requireTemplateOwnership,
@@ -14,13 +15,18 @@ const ANY_POST_CONFLICT = {
   message: 'У этого аккаунта уже есть шаблон на «любой пост».',
 };
 
-// список шаблонов конкретного подключённого аккаунта
+// список шаблонов конкретного подключённого аккаунта.
+// каждый шаблон несёт stats { started, link_sent, link_clicked } - агрегат
+// за всё время (фильтр по периоду - отдельная задача, события уже с датой)
 router.get(
   '/api/ig-accounts/:igAccountId/templates',
   requireIgAccountOwnership,
   async (req, res) => {
     const templates = await templateRepo.findAllByAccount(req.params.igAccountId);
-    res.json({ templates });
+    const statsByTemplate = await templateEventRepo.countsByTemplateIds(templates.map((t) => t.id));
+    res.json({
+      templates: templates.map((t) => ({ ...t, stats: statsByTemplate[t.id] })),
+    });
   }
 );
 
@@ -30,6 +36,7 @@ router.get(
 router.post('/api/ig-accounts/:igAccountId/templates', requireIgAccountOwnership, async (req, res) => {
   const { igAccountId } = req.params;
   const {
+    name,
     type,
     postId,
     keyword,
@@ -63,6 +70,7 @@ router.post('/api/ig-accounts/:igAccountId/templates', requireIgAccountOwnership
 
   const template = await templateRepo.create({
     igAccountId,
+    name,
     type,
     postId,
     keyword,
@@ -80,13 +88,15 @@ router.post('/api/ig-accounts/:igAccountId/templates', requireIgAccountOwnership
   });
   if (!template) return res.status(500).json({ error: 'не удалось создать шаблон' });
 
-  res.status(201).json({ template });
+  // у только что созданного шаблона событий заведомо нет - без похода в БД
+  res.status(201).json({ template: { ...template, stats: templateEventRepo.zeroStats() } });
 });
 
 // обновить шаблон (условия срабатывания, dm-текст, вкл/выкл)
 router.patch('/api/templates/:templateId', requireTemplateOwnership, async (req, res) => {
   const { templateId } = req.params;
   const {
+    name,
     type,
     postId,
     keyword,
@@ -118,6 +128,7 @@ router.patch('/api/templates/:templateId', requireTemplateOwnership, async (req,
   }
 
   const template = await templateRepo.update(templateId, {
+    name,
     type,
     postId,
     keyword,
@@ -139,7 +150,8 @@ router.patch('/api/templates/:templateId', requireTemplateOwnership, async (req,
     await templateRepo.replaceReplies(templateId, replyTexts);
   }
 
-  res.json({ template });
+  const stats = (await templateEventRepo.countsByTemplateIds([templateId]))[templateId];
+  res.json({ template: { ...template, stats } });
 });
 
 // удалить шаблон
