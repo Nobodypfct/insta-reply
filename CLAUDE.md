@@ -114,6 +114,15 @@ src/
   пост-специфичный catch-all → все-посты с keyword → все-посты catch-all.
   Логика в `template.repository.js::matchTemplate`, покрыта юнит-тестами
   (гоняй руками через `node -e`, отдельного test runner пока нет).
+  **`findAllByAccount` vs `findActiveByAccount`**: не путать — `findAllByAccount`
+  отдаёт ВСЕ шаблоны (включая выключенные), это для `GET .../templates`
+  (кабинет должен видеть и уметь включить обратно) и для `ensureDefaults`
+  (иначе единственный выключенный шаблон был бы не виден и задублировался
+  бы дефолтным при переподключении). `findActiveByAccount` фильтрует
+  `is_active = true` — только для подбора шаблона на вебхуке
+  (`webhook.service.js`), выключенный шаблон не должен матчиться на коммент.
+  Раньше это была одна функция с фильтром — из-за неё `PATCH .../:id`
+  с `{ isActive: false }` заставлял шаблон пропадать из кабинета целиком.
   На аккаунт допустим только ОДИН шаблон с `post_id IS NULL` ("любой пост"),
   независимо от `is_active`/`keyword`. Проверка в `templates.routes.js`
   (POST/PATCH) через `template.repository.js::hasAnyPostTemplate` — при

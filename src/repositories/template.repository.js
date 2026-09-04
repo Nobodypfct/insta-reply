@@ -7,9 +7,27 @@ const DEFAULT_REPLY_TEXTS = [
 ];
 const DEFAULT_DM_TEXT = 'Привет! Спасибо за комментарий 🙌 Вот то, что ты искал(а): [ССЫЛКА]';
 
-// все шаблоны аккаунта вместе с их вариантами ответов - используется и для
-// подбора подходящего шаблона на вебхуке, и для отображения в кабинете
+// ВСЕ шаблоны аккаунта (включая выключенные) вместе с вариантами ответов -
+// для отображения в кабинете (юзер сам решает, как показывать is_active)
+// и для ensureDefaults (проверка "есть ли вообще хоть один шаблон", иначе
+// выключенный единственный шаблон был бы не виден и задублировался бы
+// дефолтным при переподключении аккаунта)
 async function findAllByAccount(igAccountId) {
+  const { data, error } = await supabase
+    .from('templates')
+    .select('*, template_replies(id, text)')
+    .eq('ig_account_id', igAccountId);
+
+  if (error) {
+    console.error('template.findAllByAccount error:', error.message);
+    return [];
+  }
+  return data;
+}
+
+// только ВКЛЮЧЁННЫЕ шаблоны аккаунта - для подбора шаблона на вебхуке.
+// выключенный шаблон не должен участвовать в матчинге комментариев
+async function findActiveByAccount(igAccountId) {
   const { data, error } = await supabase
     .from('templates')
     .select('*, template_replies(id, text)')
@@ -17,7 +35,7 @@ async function findAllByAccount(igAccountId) {
     .eq('is_active', true);
 
   if (error) {
-    console.error('template.findAllByAccount error:', error.message);
+    console.error('template.findActiveByAccount error:', error.message);
     return [];
   }
   return data;
@@ -211,6 +229,7 @@ async function clearForAccount(igAccountId) {
 
 module.exports = {
   findAllByAccount,
+  findActiveByAccount,
   findById,
   hasAnyPostTemplate,
   matchTemplate,

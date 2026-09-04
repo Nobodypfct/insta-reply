@@ -43,7 +43,7 @@ async function handleNewComment(igBusinessId, commentData) {
 
   console.log(`[${igAccount.username}] new comment ${commentId} from ${fromUserId}: "${text}"`);
 
-  const templates = await templateRepo.findAllByAccount(igAccount.id);
+  const templates = await templateRepo.findActiveByAccount(igAccount.id);
   const matched = templateRepo.matchTemplate(templates, { postId, commentText: text });
 
   if (!matched) {
