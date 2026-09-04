@@ -1,6 +1,7 @@
 const express = require('express');
 const env = require('../config/env');
 const webhookService = require('../services/webhook.service');
+const { verifyWebhookSignature } = require('../middleware/webhookSignature');
 
 const router = express.Router();
 
@@ -17,8 +18,9 @@ router.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// основной эндпоинт событий - сюда meta шлёт новые комментарии
-router.post('/webhook', async (req, res) => {
+// основной эндпоинт событий - сюда meta шлёт новые комментарии.
+// verifyWebhookSignature отсекает всё без валидной подписи Meta (403)
+router.post('/webhook', verifyWebhookSignature, async (req, res) => {
   res.sendStatus(200); // отвечаем сразу, обработка асинхронная
 
   try {

@@ -1,6 +1,9 @@
 const express = require('express');
 const templateRepo = require('../repositories/template.repository');
-const igAccountRepo = require('../repositories/igAccount.repository');
+const {
+  requireIgAccountOwnership,
+  requireTemplateOwnership,
+} = require('../middleware/ownership');
 
 const router = express.Router();
 
@@ -12,15 +15,18 @@ const ANY_POST_CONFLICT = {
 };
 
 // список шаблонов конкретного подключённого аккаунта
-router.get('/api/ig-accounts/:igAccountId/templates', async (req, res) => {
-  const { igAccountId } = req.params;
-  const templates = await templateRepo.findAllByAccount(igAccountId);
-  res.json({ templates });
-});
+router.get(
+  '/api/ig-accounts/:igAccountId/templates',
+  requireIgAccountOwnership,
+  async (req, res) => {
+    const templates = await templateRepo.findAllByAccount(req.params.igAccountId);
+    res.json({ templates });
+  }
+);
 
 // создать новый шаблон
 // body: { postId?, keyword?, dmText, replyTexts: string[] }
-router.post('/api/ig-accounts/:igAccountId/templates', async (req, res) => {
+router.post('/api/ig-accounts/:igAccountId/templates', requireIgAccountOwnership, async (req, res) => {
   const { igAccountId } = req.params;
   const {
     postId,
@@ -66,7 +72,7 @@ router.post('/api/ig-accounts/:igAccountId/templates', async (req, res) => {
 });
 
 // обновить шаблон (условия срабатывания, dm-текст, вкл/выкл)
-router.patch('/api/templates/:templateId', async (req, res) => {
+router.patch('/api/templates/:templateId', requireTemplateOwnership, async (req, res) => {
   const { templateId } = req.params;
   const {
     postId,
@@ -84,10 +90,10 @@ router.patch('/api/templates/:templateId', async (req, res) => {
   } = req.body;
 
   // если этим PATCH шаблон становится "на любой пост" (postId явно очищается) -
-  // проверяем, что у аккаунта нет ДРУГОГО any-post шаблона (себя исключаем)
+  // проверяем, что у аккаунта нет ДРУГОГО any-post шаблона (себя исключаем).
+  // req.template подгружен в requireTemplateOwnership
   if (postId !== undefined && !postId) {
-    const existing = await templateRepo.findById(templateId);
-    if (existing && (await templateRepo.hasAnyPostTemplate(existing.ig_account_id, templateId))) {
+    if (await templateRepo.hasAnyPostTemplate(req.template.ig_account_id, templateId)) {
       return res.status(409).json(ANY_POST_CONFLICT);
     }
   }
@@ -115,7 +121,7 @@ router.patch('/api/templates/:templateId', async (req, res) => {
 });
 
 // удалить шаблон
-router.delete('/api/templates/:templateId', async (req, res) => {
+router.delete('/api/templates/:templateId', requireTemplateOwnership, async (req, res) => {
   await templateRepo.remove(req.params.templateId);
   res.status(204).send();
 });

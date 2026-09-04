@@ -37,6 +37,10 @@ src/
     webhook.service.js             — обработка входящего комментария/postback
     oauth.service.js               — завершение OAuth-подключения
     igAccount.service.js           — список аккаунтов + TTL-рефреш аватарки
+  middleware/                      — Express-middleware (аутентификация, доступ)
+    auth.js                        — проверка Supabase JWT, ставит req.userId
+    ownership.js                   — req.userId владеет ресурсом из :id? (IDOR)
+    webhookSignature.js            — проверка X-Hub-Signature-256 от Meta
   routes/                          — тонкий HTTP-слой
     webhook.routes.js
     igAccounts.routes.js
@@ -129,6 +133,42 @@ src/
   email текущего владельца, фронтенд показывает подтверждение переноса
   (как у ChatPlace).
 
+## Безопасность
+
+- **Аутентификация всех `/api/*`**: `server.js` вешает `middleware/auth.js`
+  на префикс `/api`. Фронт шлёт `Authorization: Bearer <Supabase access token>`.
+  Проверка локальная через `jose` + `createRemoteJWKSet` против публичного
+  JWKS проекта (`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, ключи ES256,
+  ротация переживается автоматически). Сверяем `iss`, `aud=authenticated`,
+  `exp` и `role==="authenticated"` (последнее отсекает anon/service_role).
+  `req.userId = payload.sub`. Ошибка → `401 { code: "unauthorized" }`.
+  `/` и `/webhook` — БЕЗ этого middleware (у вебхука своя подпись).
+- **`user_id` в запросах больше НЕ принимается** — ни в query, ни в body.
+  Личность только из токена (`req.userId`). Не возвращай это поле в контракт.
+- **Проверка владельца (IDOR)** — `middleware/ownership.js`. service-role
+  клиент видит все строки, поэтому владельца проверяем явно в коде:
+  `requireIgAccountOwnership` (роуты с `:igAccountId`) и
+  `requireTemplateOwnership` (роуты с `:templateId`, владелец через
+  `ig_account`). Чужой ресурс → `403 { code: "forbidden" }`, отсутствует →
+  `404 { code: "not_found" }`. Оба кладут найденную запись в
+  `req.igAccount` / `req.template`, чтобы роут не делал второй запрос.
+  `conversation_states` / `activity_log` трогает только вебхук (без юзера) —
+  там проверок нет и не нужно.
+- **Подпись вебхука** — `middleware/webhookSignature.js` проверяет
+  `X-Hub-Signature-256` (HMAC-SHA256 по сырому телу, ключ `IG_APP_SECRET`,
+  `crypto.timingSafeEqual`). Сырое тело берётся из `express.json({ verify })`
+  в `server.js` (`req.rawBody`). Несовпадение/отсутствие → `403`, событие
+  не обрабатывается. GET-проверку `hub.verify_token` не трогали.
+- **env.js падает на старте**, если нет любой из: `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `VERIFY_TOKEN`, `IG_APP_SECRET`, `FRONTEND_URL`
+  (раньше был мягкий `console.warn`). Отдельного JWT-секрета нет — JWKS публичный.
+- **CORS** — `cors({ origin: env.frontendUrl })`, `FRONTEND_URL` обязателен.
+- **Логи**: не пишем `err.response?.data` из ошибок Graph API (могут содержать
+  токен) — только `err.message`.
+- **Тесты**: middleware покрыты (гонял через временный скрипт с `jose` +
+  локальным JWKS и заглушками репозиториев, 23 кейса). Постоянного раннера
+  нет — при доработке гоняй вручную так же.
+
 ## Supabase-специфичное
 
 - **"Automatically expose new tables" выключен** — при создании НОВЫХ таблиц
@@ -159,3 +199,23 @@ src/
 - не используй `graph.facebook.com` ни для чего в этом проекте
 - self-serve OAuth живёт на ФРОНТЕНДЕ через Auth.js, не здесь — этот backend
   только принимает уже готовый long-lived токен на `/api/complete-instagram-connect`
+
+## TODO: безопасность (отложено, не в текущем PR)
+
+Приоритет сверху вниз. Первый пункт — следующая задача.
+
+- **Шифрование `page_access_token` в БД.** Сейчас лежит открытым текстом
+  (60-дневный токен с полным доступом к IG-аккаунту). Нужно: ключ шифрования
+  (env/KMS), AES-GCM, миграция существующих строк, расшифровка во всех местах
+  чтения токена (`igAccount.repository`, `oauth.service`, `igAccount.service`,
+  `webhook.service`). Если 24ч-рефреш аватарки окажется ненадёжным — та же
+  эскалация уже описана в граблях #4.
+- **`helmet`** — security-заголовки (HSTS, nosniff, frameguard и т.д.).
+- **Rate limiting** — на `POST /api/complete-instagram-connect`, CRUD шаблонов
+  и `POST /webhook` (`express-rate-limit` или на уровне Render/прокси).
+- **Валидация входных данных** — сейчас `:id` и тела идут в Supabase как есть;
+  кривой UUID → необработанный 500. Нужна схема-валидация (zod/joi) на телах.
+- **`npm audit`** — ни разу не гоняли; повесить в CI.
+- **RLS в Postgres как второй слой** — политики на все таблицы + клиент с
+  anon-ключом и JWT юзера. Пути вебхука остаются на service-role. Defense in
+  depth поверх проверок в `middleware/ownership.js`.
