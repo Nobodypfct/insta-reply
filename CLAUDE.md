@@ -104,30 +104,76 @@ src/
    Всегда сверяй с тем, что реально включено в App Dashboard → Permissions
    and features, а не с тем, что написано в сторонних гайдах.
 
+8. **Входящие DM-сообщения** приходят в вебхук `entry.messaging[]` с полем
+   `message` (не `postback`) — тот же конверт, что и postback/комменты, поле
+   `subscribed_fields` у нас включает `messages` **с самого начала проекта**
+   (было в коде ещё до фичи "проверка подписки"), отдельно подписываться
+   не нужно — только на App Dashboard → Webhooks проверь, что галка `messages`
+   реально стоит (по аналогии с `messaging_postbacks` в своё время).
+   **Reply-петля для DM**: сообщение с `message.is_echo === true` — это эхо
+   НАШЕГО ЖЕ исходящего сообщения, не входящее. Плюс подстраховка
+   `senderId === igAccount.ig_business_id` в `webhook.service.js`. Не убирай
+   ни ту, ни другую проверку — без них дубли/петля, как в грабле #5, только
+   для DM. Сообщение без `message.text` (стикер/вложение) тоже пропускаем -
+   матчить не на что.
+
 ## Важные решения архитектуры
 
 - **Мультитенантность**: `entry.id` из вебхука = `ig_business_id` аккаунта-
   владельца поста. По нему ищем нужный `ig_account` в БД, не хардкодим.
-- **Модель шаблонов**: `templates` (scope: все посты / конкретный пост +
-  опциональное keyword-слово) + `template_replies` (варианты ответа,
-  рандомный выбор). Приоритет матчинга: пост-специфичный с keyword →
-  пост-специфичный catch-all → все-посты с keyword → все-посты catch-all.
-  Логика в `template.repository.js::matchTemplate`, покрыта юнит-тестами
-  (гоняй руками через `node -e`, отдельного test runner пока нет).
+- **Модель шаблонов**: `templates.type` — `'comment'` (дефолт, старое
+  поведение) | `'dm'` (новое: триггер — входящее DM-сообщение, не коммент).
+  **Два типа матчатся ПОЛНОСТЬЮ РАЗДЕЛЬНО**, никогда не смешиваются:
+  - `type='comment'`: scope (все посты / конкретный пост) + опциональное
+    keyword (contains-only), + `template_replies` (варианты ПУБЛИЧНОГО
+    ответа на коммент, рандомный выбор). Приоритет матчинга: пост-специфичный
+    с keyword → пост-специфичный catch-all → все-посты с keyword →
+    все-посты catch-all. Логика в `template.repository.js::matchTemplate`,
+    вызывается из `webhook.service.js::handleNewComment` через
+    `findActiveByAccount(id, 'comment')`.
+  - `type='dm'`: нет scope по посту вообще (у DM его нет). Матчинг —
+    `template.repository.js::matchDmTemplate`: keyword (`exact_match=false`,
+    дефолт) → contains, как у comment; `exact_match=true` → точное совпадение
+    текста сообщения с keyword (после trim+lowercase); без keyword — catch-all.
+    `template_replies` НЕ используется (у DM нет публичного ответа, только
+    `dm_text`) — `create()` не сеет `DEFAULT_REPLY_TEXTS` для `type='dm'`,
+    если `replyTexts` не переданы явно. Есть `links jsonb` (`[{text,url}]`) —
+    пока чистый CRUD без логики отправки, как в своё время
+    `link_button_text`/`link_button_url` (задел под будущее).
+    Вызывается из `webhook.service.js::handleIncomingDm` через
+    `findActiveByAccount(id, 'dm')`. Reuse: `require_follow_check` и вся её
+    механика (кнопка → postback → `handlePostback` → проверка подписки)
+    работает БЕЗ ИЗМЕНЕНИЙ для dm-шаблонов — `handlePostback` не знает и не
+    должен знать, стартовал диалог с коммента или с DM. Единственная разница
+    с comment-веткой: у DM юзер уже написал нам сам, consent есть сразу,
+    поэтому кнопка шлётся по `{ id: senderId }`, а не по `{ comment_id }`
+    (та особенность из граблей #2 — только для comment-origin).
+  - **Известное ограничение**: `conversation_states` уникален по
+    `(ig_account_id, commenter_id)`, без учёта происхождения (коммент/DM).
+    Если один и тот же юзер попадёт в follow-check и с comment-, и с
+    dm-шаблона, второй диалог перезапишет состояние первого (upsert). Редкий
+    кейс, осознанно не чиним — если станет проблемой, решение: добавить
+    колонку `source` в уникальный ключ.
+  - DM-ответы **не пишутся в `activity_log`** — там `comment_id text not null`,
+    у DM его нет. Не баг, просто пока не логируем (лог только у comment-flow).
   **`findAllByAccount` vs `findActiveByAccount`**: не путать — `findAllByAccount`
-  отдаёт ВСЕ шаблоны (включая выключенные), это для `GET .../templates`
-  (кабинет должен видеть и уметь включить обратно) и для `ensureDefaults`
-  (иначе единственный выключенный шаблон был бы не виден и задублировался
-  бы дефолтным при переподключении). `findActiveByAccount` фильтрует
-  `is_active = true` — только для подбора шаблона на вебхуке
-  (`webhook.service.js`), выключенный шаблон не должен матчиться на коммент.
-  Раньше это была одна функция с фильтром — из-за неё `PATCH .../:id`
-  с `{ isActive: false }` заставлял шаблон пропадать из кабинета целиком.
-  На аккаунт допустим только ОДИН шаблон с `post_id IS NULL` ("любой пост"),
-  независимо от `is_active`/`keyword`. Проверка в `templates.routes.js`
-  (POST/PATCH) через `template.repository.js::hasAnyPostTemplate` — при
-  нарушении 409 `{ code: "any_post_template_exists", message }`. Это вторая
-  линия защиты, основную держит фронт; при ошибке запроса проверка
+  отдаёт ВСЕ шаблоны любого типа (включая выключенные), это для
+  `GET .../templates` (кабинет должен видеть и уметь включить обратно) и для
+  `ensureDefaults` (иначе единственный выключенный шаблон был бы не виден и
+  задублировался бы дефолтным при переподключении). `findActiveByAccount(id, type?)`
+  фильтрует `is_active = true` (+ `type`, если передан) — используется
+  ТОЛЬКО для подбора шаблона на вебхуке, всегда с явным `type`, иначе
+  comment- и dm-шаблоны смешаются и один сработает вместо другого.
+  Раньше `findAllByAccount` была одна функция с фильтром — из-за неё
+  `PATCH .../:id` с `{ isActive: false }` заставлял шаблон пропадать из
+  кабинета целиком.
+  На аккаунт допустим только ОДИН **comment**-шаблон с `post_id IS NULL`
+  ("любой пост"), независимо от `is_active`/`keyword`. **dm-шаблоны это
+  правило не касается вообще** — у них нет `post_id`, `hasAnyPostTemplate`
+  скоупится по `type='comment'`, а роуты (`templates.routes.js`) проверяют
+  конфликт только когда создаваемый/патчимый шаблон сам `type='comment'`.
+  При нарушении 409 `{ code: "any_post_template_exists", message }`. Это
+  вторая линия защиты, основную держит фронт; при ошибке запроса проверка
   пропускает (fail-open).
 - **Опциональные поля шаблона** мапятся из camelCase тела запроса в
   snake_case колонки через `template.repository.js::applyOptionalTemplateFields`

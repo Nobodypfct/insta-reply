@@ -43,7 +43,7 @@ async function handleNewComment(igBusinessId, commentData) {
 
   console.log(`[${igAccount.username}] new comment ${commentId} from ${fromUserId}: "${text}"`);
 
-  const templates = await templateRepo.findActiveByAccount(igAccount.id);
+  const templates = await templateRepo.findActiveByAccount(igAccount.id, 'comment');
   const matched = templateRepo.matchTemplate(templates, { postId, commentText: text });
 
   if (!matched) {
@@ -188,4 +188,71 @@ async function handlePostback(igBusinessId, senderId, payload) {
   console.log(`[${igAccount.username}] conversation ${state.id} in unexpected status "${state.status}", ignoring`);
 }
 
-module.exports = { handleNewComment, handlePostback };
+// обрабатывает входящее DM-сообщение (вебхук messages, НЕ postback и НЕ echo -
+// оба уже отфильтрованы в webhook.routes.js, но проверка сендера ниже -
+// дополнительная подстраховка от реплай-петли, как и для комментариев).
+// Подбирает dm-шаблон по keyword/exact_match, шлёт ответ той же механикой,
+// что comment-шаблоны: без require_follow_check - сразу текст, с ним -
+// кнопка + conversation_state (дальше ведёт handlePostback - ему всё равно,
+// с чего начался диалог, с коммента или с DM).
+//
+// В отличие от handleNewComment: юзер уже написал нам сам, consent на
+// отправку по id уже есть - comment_id тут не нужен и невозможен (у входящего
+// DM его просто нет).
+async function handleIncomingDm(igBusinessId, senderId, messageText) {
+  if (!igBusinessId || !senderId) return;
+
+  const igAccount = await igAccountRepo.findByBusinessId(igBusinessId);
+  if (!igAccount) {
+    console.log(`ig account ${igBusinessId} not found for incoming dm, skipping`);
+    return;
+  }
+
+  // защита от петли: не отвечаем сами себе
+  if (senderId === igAccount.ig_business_id) {
+    console.log(`skipping own dm from ${senderId} (avoiding reply loop)`);
+    return;
+  }
+
+  if (!igAccount.webhook_enabled) {
+    console.log(`webhook disabled for ${igAccount.username}, skipping dm`);
+    return;
+  }
+
+  console.log(`[${igAccount.username}] incoming dm from ${senderId}: "${messageText}"`);
+
+  const templates = await templateRepo.findActiveByAccount(igAccount.id, 'dm');
+  const matched = templateRepo.matchDmTemplate(templates, messageText);
+
+  if (!matched) {
+    console.log(`no matching dm template for ${senderId}, skipping`);
+    return;
+  }
+
+  if (matched.require_follow_check === true) {
+    await instagramService.sendButtonMessage(
+      igAccount.page_access_token,
+      igAccount.ig_business_id,
+      senderId,
+      matched.dm_text,
+      matched.button_text_initial || 'Получить',
+      String(matched.id)
+    );
+
+    await conversationStateRepo.create({
+      igAccountId: igAccount.id,
+      commenterId: senderId,
+      templateId: matched.id,
+    });
+    return;
+  }
+
+  await instagramService.sendTextMessage(
+    igAccount.page_access_token,
+    igAccount.ig_business_id,
+    senderId,
+    matched.dm_text
+  );
+}
+
+module.exports = { handleNewComment, handlePostback, handleIncomingDm };

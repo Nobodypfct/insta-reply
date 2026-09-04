@@ -26,16 +26,28 @@ router.post('/webhook', verifyWebhookSignature, async (req, res) => {
   try {
     const entries = req.body.entry || [];
     for (const entry of entries) {
-      // messaging-события (клик по кнопке в DM) приходят в другом формате,
-      // чем comments: entry.messaging[] вместо entry.changes[]
+      // messaging-события (клик по кнопке в DM, входящее DM-сообщение)
+      // приходят в другом формате, чем comments: entry.messaging[] вместо
+      // entry.changes[]
       if (Array.isArray(entry.messaging)) {
         for (const event of entry.messaging) {
-          if (!event.postback) continue;
           // для messaging бизнес-аккаунт = получатель (recipient.id);
           // entry.id тоже обычно он, но recipient надёжнее
           const igBusinessId = event.recipient?.id || entry.id;
           const senderId = event.sender?.id;
-          await webhookService.handlePostback(igBusinessId, senderId, event.postback.payload);
+
+          if (event.postback) {
+            await webhookService.handlePostback(igBusinessId, senderId, event.postback.payload);
+            continue;
+          }
+
+          // входящее DM-сообщение. is_echo - это эхо нашего же исходящего
+          // сообщения (бот сам его отправил), НЕ реальное входящее - иначе
+          // реплай-петля/дубли. Сообщение без text (стикер/вложение) - тоже
+          // пропускаем, матчить не на что
+          if (event.message && !event.message.is_echo && event.message.text) {
+            await webhookService.handleIncomingDm(igBusinessId, senderId, event.message.text);
+          }
         }
         continue;
       }
